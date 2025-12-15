@@ -1,10 +1,8 @@
 import argparse
 import csv
 import json
-import os
 import random
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urljoin
@@ -13,6 +11,33 @@ import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+
+import os
+import time
+
+VERBOSE = os.getenv("VERBOSE", "0") == "1"
+
+
+def vprint(*args):
+    if VERBOSE:
+        print(*args, flush=True)
+
+
+def safe_get(session, url, retries=3, backoff_factor=1, **kwargs):
+    """Wrapper autour de session.get avec backoff et logs verboses."""
+
+    for attempt in range(retries):
+        try:
+            return session.get(url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            if attempt == retries - 1:
+                vprint(f"safe_get: échec pour {url} après {retries} tentatives ({exc})")
+                raise
+
+            wait_time = backoff_factor * (2 ** attempt)
+            vprint(f"safe_get: tentative {attempt + 1}/{retries} échouée ({exc}), nouvelle tentative dans {wait_time}s")
+            time.sleep(wait_time)
 
 
 class StoreDeadlineExceeded(Exception):
