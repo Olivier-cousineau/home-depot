@@ -1,6 +1,9 @@
+import argparse
 import json
 import os
 import re
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,6 +29,8 @@ def build_store_slug(store_id: str, city: str, province: str) -> str:
 STORE_URL_TEMPLATE = "https://www.homedepot.ca/store-details/{store_id}"
 DEFAULT_STORES_PATH = Path("data/home_depot_stores.json")
 FALLBACK_SHARDS_DIR = Path("shards")
+DEFAULT_MAX_STORES = 25
+REQUEST_TIMEOUT = 15
 
 
 @dataclass
@@ -256,7 +261,7 @@ def _extract_from_html(soup: BeautifulSoup) -> Dict[str, str]:
 
 def fetch_store_details(session: requests.Session, store_id: str) -> Dict[str, str]:
     url = STORE_URL_TEMPLATE.format(store_id=store_id)
-    response = session.get(url, timeout=(10, 60))
+    response = session.get(url, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -274,40 +279,92 @@ def save_stores(stores: List[Store]) -> None:
         json.dump([store.to_dict() for store in stores], f, ensure_ascii=False, indent=2)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Enrich Home Depot stores data")
+    parser.add_argument(
+        "--max-stores",
+        type=int,
+        help="Maximum number of stores to process (overrides ENRICH_MAX_STORES)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run without writing changes (overrides DRY_RUN)",
+    )
+    return parser.parse_args()
+
+
+def _get_max_stores(arg_value: Optional[int]) -> int:
+    if arg_value is not None:
+        return max(arg_value, 0)
+    return max(int(os.getenv("ENRICH_MAX_STORES", str(DEFAULT_MAX_STORES))), 0)
+
+
+def _is_dry_run(arg_dry_run: bool) -> bool:
+    if arg_dry_run:
+        return True
+    return os.getenv("DRY_RUN", "0") == "1"
+
+
 def main() -> None:
-    stores = load_stores()
+    args = _parse_args()
+    max_stores = _get_max_stores(args.max_stores)
+    dry_run = _is_dry_run(args.dry_run)
+
+    try:
+        stores = load_stores()
+    except FileNotFoundError as exc:
+        print(f"[ENRICH][CRITICAL] {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
     session = _configure_session()
     enriched_count = 0
-    total_needing_enrichment = sum(store.needs_enrichment() for store in stores)
-
-    print(f"🔎 Stores à enrichir: {total_needing_enrichment}/{len(stores)}")
-
+    target_stores: List[Store] = []
     for store in stores:
-        if not store.needs_enrichment():
+        if store.needs_enrichment():
+            target_stores.append(store)
+        else:
             store.apply_details({})
-            continue
 
+    total_targets = len(target_stores)
+    limit = min(total_targets, max_stores) if max_stores else total_targets
+
+    print(f"🔎 Stores à enrichir: {total_targets}/{len(stores)} (processing {limit})")
+
+    for idx, store in enumerate(target_stores[:limit], start=1):
+        start_time = time.monotonic()
+        print(
+            f"[ENRICH] Processing store {idx}/{limit} - {store.storeId} - {store.name}",
+            flush=True,
+        )
         try:
             details = fetch_store_details(session, store.storeId)
-        except requests.RequestException as exc:
-            print(f"[STORE {store.storeId}] ❌ Erreur réseau: {exc}")
+            if not details:
+                print(f"[ENRICH][ERROR] store {store.storeId} no data returned")
+                continue
+
+            updated = store.apply_details(details)
+            if updated:
+                enriched_count += 1
+            duration = time.monotonic() - start_time
+            print(
+                f"[ENRICH] Done store {store.storeId} in {duration:.2f}s",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            duration = time.monotonic() - start_time
+            print(f"[ENRICH][ERROR] store {store.storeId} {exc} ({duration:.2f}s)")
             continue
 
-        if not details:
-            print(f"[STORE {store.storeId}] ⚠️ Aucune donnée trouvée")
-            continue
+    if dry_run:
+        print("[ENRICH] DRY_RUN enabled - no changes will be written")
+    else:
+        save_stores(stores)
+        print(f"[ENRICH] Saved updates to {DEFAULT_STORES_PATH}")
 
-        updated = store.apply_details(details)
-        print(
-            f"[STORE {store.storeId}] found city={store.city or '?'}; "
-            f"province={store.province or '?'}; postalCode={store.postalCode or '?'}"
-        )
-        if updated:
-            enriched_count += 1
-
-    save_stores(stores)
     print(
-        f"✅ Enrichment complete: enriched {enriched_count}/{len(stores)} stores."
+        f"✅ Enrichment complete: enriched {enriched_count}/{limit} processed stores.",
+        flush=True,
     )
 
 

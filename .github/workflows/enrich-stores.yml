@@ -11,6 +11,14 @@ on:
         description: "Stores per shard when regenerating"
         required: false
         default: "8"
+      enrich_max_stores:
+        description: "Maximum number of stores to enrich"
+        required: false
+        default: "25"
+      dry_run:
+        description: "Run enrichment without writing changes"
+        required: false
+        default: "0"
 
 jobs:
   enrich:
@@ -30,6 +38,10 @@ jobs:
           python -m pip install beautifulsoup4 requests
 
       - name: Enrich store catalog
+        timeout-minutes: 15
+        env:
+          ENRICH_MAX_STORES: ${{ inputs.enrich_max_stores }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: python scripts/enrich_home_depot_stores.py
 
       - name: Optionally regenerate shards
