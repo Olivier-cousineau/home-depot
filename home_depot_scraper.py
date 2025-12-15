@@ -10,12 +10,15 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 class HomeDepotScraper:
     def __init__(self):
         self.base_url = "https://www.homedepot.ca"
         self.api_base = "https://www.homedepot.ca/api"
+        self.timeout = (10, 90)
 
         # Rotation des User-Agents pour éviter la détection
         self.user_agents = [
@@ -27,16 +30,32 @@ class HomeDepotScraper:
         ]
 
         self.session = requests.Session()
+        self.configure_session()
         self.products = []
         self.stores = []
         self.update_headers()
+
+    def configure_session(self):
+        retry_strategy = Retry(
+            total=8,
+            connect=8,
+            read=8,
+            status=8,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            backoff_factor=1,
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
     def update_headers(self):
         """Met à jour les headers avec un User-Agent aléatoire"""
         self.session.headers.update({
             'User-Agent': random.choice(self.user_agents),
             'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'fr-CA,fr;q=0.9,en-CA;q=0.8,en;q=0.7',
+            'Accept-Language': 'en-CA,en;q=0.9,fr-CA;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Referer': 'https://www.homedepot.ca/',
@@ -53,7 +72,19 @@ class HomeDepotScraper:
         delay = random.uniform(min_delay, max_delay)
         time.sleep(delay)
 
-    def make_request(self, url, max_retries=5, use_json=False):
+    def save_debug_proof(self, url, exception, retry_count, store_id=None, step=None):
+        if not os.path.exists("debug"):
+            os.makedirs("debug")
+
+        filename = f"debug/{store_id or 'unknown'}_{step or 'request'}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"URL: {url}\n")
+            f.write(f"Exception: {exception}\n")
+            f.write(f"Retry count: {retry_count}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+        print(f"🧾 Preuve de debug enregistrée: {filename}")
+
+    def make_request(self, url, max_retries=8, use_json=False, store_id=None, step=None):
         """Effectue une requête avec retry et rotation de User-Agent"""
         for attempt in range(max_retries):
             try:
@@ -64,8 +95,10 @@ class HomeDepotScraper:
                     time.sleep(wait_time)
 
                 print(f"🔍 Requête: {url[:80]}... (Tentative {attempt + 1}/{max_retries})")
-
-                response = self.session.get(url, timeout=30)
+                start_time = time.monotonic()
+                response = self.session.get(url, timeout=self.timeout, headers=self.session.headers)
+                duration = time.monotonic() - start_time
+                print(f"🌐 URL: {url} | Status: {response.status_code} | Temps: {duration:.2f}s")
 
                 if 'captcha' in response.text.lower() or response.status_code == 403:
                     print("⚠️  CAPTCHA détecté ou accès refusé - Changement de stratégie...")
@@ -80,6 +113,10 @@ class HomeDepotScraper:
                 return response
 
             except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response else "N/A"
+                print(f"❌ Erreur HTTP {status}: {e}")
+                if status in [403, 429]:
+                    self.save_debug_proof(url, e, attempt + 1, store_id, step)
                 if e.response.status_code == 429:
                     print("⚠️  Rate limit atteint - Pause prolongée...")
                     time.sleep(60)
@@ -90,9 +127,12 @@ class HomeDepotScraper:
                     print(f"❌ Erreur HTTP {e.response.status_code}: {e}")
             except requests.exceptions.RequestException as e:
                 print(f"❌ Erreur de connexion: {e}")
+                if isinstance(e, requests.exceptions.Timeout):
+                    self.save_debug_proof(url, e, attempt + 1, store_id, step)
 
             if attempt == max_retries - 1:
                 print(f"❌ Échec après {max_retries} tentatives")
+                self.save_debug_proof(url, Exception("Max retries exceeded"), attempt + 1, store_id, step)
                 return None
 
         return None
@@ -133,7 +173,7 @@ class HomeDepotScraper:
 
     def verify_store(self, store):
         """Vérifie si un magasin existe et récupère ses détails"""
-        response = self.make_request(store['url'])
+        response = self.make_request(store['url'], store_id=store.get('store_number'), step="verify_store")
         if response and response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             store_name = soup.find(['h1', 'h2'], class_=lambda x: x and 'store' in x.lower() if x else False)
@@ -157,7 +197,7 @@ class HomeDepotScraper:
         store_products = []
 
         for url in clearance_urls:
-            response = self.make_request(url)
+            response = self.make_request(url, store_id=store.get('store_number'), step="clearance")
             if not response:
                 continue
 
