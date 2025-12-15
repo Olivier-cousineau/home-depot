@@ -1,8 +1,10 @@
 import argparse
 import csv
 import json
+import os
 import random
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
@@ -12,11 +14,30 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-
-import os
-import time
-
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
+
+
+def slugify(text):
+    text = (text or "").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-")
+
+
+def build_store_slug(store_id, city=None, province=None, fallback_slug=None):
+    slug_parts = [str(store_id).strip()]
+    if city:
+        slug_parts.append(slugify(city))
+    if province:
+        slug_parts.append(slugify(province))
+
+    computed_slug = "-".join([part for part in slug_parts if part])
+    if computed_slug.strip("-"):
+        return computed_slug
+
+    if fallback_slug:
+        return fallback_slug
+
+    return f"store-{store_id}"
 
 
 def vprint(*args):
@@ -72,9 +93,7 @@ class HomeDepotScraper:
         self.update_headers()
 
     def _slugify(self, text):
-        text = text.lower()
-        text = re.sub(r"[^a-z0-9]+", "-", text)
-        return re.sub(r"-+", "-", text).strip("-")
+        return slugify(text)
 
     def _parse_store_slug(self, store_url, fallback_name=None):
         parsed = urlparse(store_url)
@@ -233,7 +252,12 @@ class HomeDepotScraper:
                 "city": store.get("city"),
                 "province": store.get("province"),
                 "postalCode": store.get("postalCode"),
-                "slug": store.get("slug"),
+                "slug": build_store_slug(
+                    store_id,
+                    city=store.get("city"),
+                    province=store.get("province"),
+                    fallback_slug=store.get("slug"),
+                ),
                 "url": f"{self.base_url}/store-details/{store_id}",
             }
 
