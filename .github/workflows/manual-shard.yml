@@ -1,0 +1,82 @@
+name: Manual shard runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action à exécuter"
+        required: true
+        type: choice
+        options:
+          - create_shards
+          - list_shards
+          - run_shard
+      shard_id:
+        description: "ID du shard à lancer (requis pour run_shard)"
+        required: false
+        default: ""
+      stores_per_shard:
+        description: "Nombre de magasins par shard (utilisé lors de la création)"
+        required: false
+        default: "8"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.action }}" = "run_shard" ] && [ -z "${{ inputs.shard_id }}" ]; then
+            echo "Un shard_id est requis pour l'action run_shard"
+            exit 1
+          fi
+
+      - name: Run scraper action
+        run: |
+          case "${{ inputs.action }}" in
+            create_shards)
+              python home_depot_scraper.py --create-shards --stores-per-shard "${{ inputs.stores_per_shard }}"
+              ;;
+            list_shards)
+              python home_depot_scraper.py --list-shards
+              ;;
+            run_shard)
+              python home_depot_scraper.py --run-shard "${{ inputs.shard_id }}"
+              ;;
+            *)
+              echo "Action inconnue: ${{ inputs.action }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload shards manifest
+        if: inputs.action == 'create_shards'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shards
+          path: |
+            shards/**/*.json
+          if-no-files-found: warn
+
+      - name: Upload shard results
+        if: inputs.action == 'run_shard'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ inputs.shard_id }}-results
+          path: |
+            results/shard_${{ inputs.shard_id }}_results.*
+          if-no-files-found: warn

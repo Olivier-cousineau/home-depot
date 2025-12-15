@@ -33,3 +33,16 @@ Ce référentiel contient un scraper Home Depot Canada qui répartit les magasin
    - Ajustez `--stores-per-shard` si vous souhaitez des lots plus petits ou plus grands, puis relancez `--create-shards`.
    - Les journaux indiquent la progression du shard, les vérifications de magasins et les sauvegardes de fichiers.
 
+## Lancer un shard via GitHub Actions (workflow manuel)
+
+Un workflow GitHub Actions est disponible pour déclencher ces commandes sans ligne de commande locale. Dans l'onglet **Actions** de votre dépôt GitHub :
+
+1. Sélectionnez le workflow **"Manual shard runner"**.
+2. Cliquez sur **"Run workflow"** et choisissez l'action à exécuter :
+   - `create_shards` : génère les shards avec `stores_per_shard` (défaut : 8).
+   - `list_shards` : affiche dans les logs la liste des shards disponibles.
+   - `run_shard` : lance un shard spécifique (champ `shard_id` requis).
+3. Une fois le workflow terminé, récupérez les fichiers générés dans l'onglet **Artifacts** :
+   - `shards` après `create_shards` (manifest.json et fichiers shard_XX.json).
+   - `shard-<ID>-results` après `run_shard` (résultats CSV/JSON du shard lancé).
+
