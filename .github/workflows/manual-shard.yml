@@ -12,12 +12,11 @@ on:
         type: choice
         options:
           - create_shards
-          - list_shards
           - run_shard
-      shard_id:
+      shard:
         description: "ID du shard à lancer (requis pour run_shard)"
         required: false
-        default: ""
+        default: "1"
       stores_per_shard:
         description: "Nombre de magasins par shard (utilisé lors de la création)"
         required: false
@@ -43,7 +42,7 @@ jobs:
 
       - name: Validate inputs
         run: |
-          if [ "${{ inputs.action }}" = "run_shard" ] && [ -z "${{ inputs.shard_id }}" ]; then
+          if [ "${{ inputs.action }}" = "run_shard" ] && [ -z "${{ inputs.shard }}" ]; then
             echo "Un shard_id est requis pour l'action run_shard"
             exit 1
           fi
@@ -54,11 +53,8 @@ jobs:
             create_shards)
               python home_depot_scraper.py --create-shards --stores-per-shard "${{ inputs.stores_per_shard }}"
               ;;
-            list_shards)
-              python home_depot_scraper.py --list-shards
-              ;;
             run_shard)
-              python home_depot_scraper.py --run-shard "${{ inputs.shard_id }}"
+              python home_depot_scraper.py run_shard --shard "${{ inputs.shard }}"
               ;;
             *)
               echo "Action inconnue: ${{ inputs.action }}"
@@ -89,7 +85,7 @@ jobs:
         if: inputs.action == 'run_shard'
         uses: actions/upload-artifact@v4
         with:
-          name: shard-${{ inputs.shard_id }}-results
+          name: shard-${{ inputs.shard }}-results
           path: |
-            results/shard_${{ inputs.shard_id }}_results.*
+            results/shard_${{ inputs.shard }}_results.*
           if-no-files-found: warn

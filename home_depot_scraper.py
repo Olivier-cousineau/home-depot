@@ -383,6 +383,8 @@ class ShardManager:
         """Charge un shard spécifique"""
         shard_filename = os.path.join(self.shards_dir, f"shard_{shard_id:02d}.json")
 
+        print(f"Running shard {shard_id} using {shard_filename}")
+
         if not os.path.exists(shard_filename):
             print(f"❌ Shard {shard_id} introuvable: {shard_filename}")
             return None
@@ -390,6 +392,7 @@ class ShardManager:
         with open(shard_filename, 'r', encoding='utf-8') as f:
             shard_info = json.load(f)
 
+        print(f"Stores in shard: {len(shard_info['stores'])}")
         print(f"✅ Shard {shard_id} chargé: {len(shard_info['stores'])} magasins")
         return shard_info
 
@@ -428,41 +431,53 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemples d'utilisation:
-  
+
   1. Créer les shards (à faire une seule fois):
-     python script.py --create-shards
-  
-  2. Lister les shards disponibles:
-     python script.py --list-shards
-  
-  3. Scraper un shard spécifique:
-     python script.py --run-shard 1
-     python script.py --run-shard 2
-     python script.py --run-shard 3
-  
-  4. Personnaliser le nombre de magasins par shard:
-     python script.py --create-shards --stores-per-shard 5
+     python home_depot_scraper.py create_shards --stores-per-shard 5
+
+  2. Scraper un shard spécifique:
+     python home_depot_scraper.py run_shard --shard 1
+     python home_depot_scraper.py run_shard --shard 2
+     python home_depot_scraper.py run_shard --shard 3
         """
     )
 
+    subparsers = parser.add_subparsers(dest='command')
+
+    create_parser = subparsers.add_parser('create_shards', help='Créer les shards')
+    create_parser.add_argument('--stores-per-shard', type=int, default=8,
+                               help='Nombre de magasins par shard (défaut: 8)')
+
+    run_parser = subparsers.add_parser('run_shard', help='Scraper un shard spécifique')
+    run_parser.add_argument('--shard', type=int, default=1,
+                            help='Scraper le shard numéro N (défaut: 1)')
+
     parser.add_argument('--create-shards', action='store_true',
-                       help='Créer les shards à partir de tous les magasins')
+                       help='Créer les shards à partir de tous les magasins (compatibilité)')
     parser.add_argument('--list-shards', action='store_true',
                        help='Lister tous les shards disponibles')
     parser.add_argument('--run-shard', type=int, metavar='N',
-                       help='Scraper le shard numéro N')
+                       help='Scraper le shard numéro N (compatibilité)')
     parser.add_argument('--stores-per-shard', type=int, default=8,
                        help='Nombre de magasins par shard (défaut: 8)')
 
     args = parser.parse_args()
 
-    if not (args.create_shards or args.list_shards or args.run_shard):
+    selected_command = args.command
+    create_shards_flag = args.create_shards or selected_command == 'create_shards'
+    run_shard_id = args.run_shard if args.run_shard is not None else None
+    run_shard_id = args.shard if selected_command == 'run_shard' else run_shard_id
+    stores_per_shard = args.stores_per_shard
+    if selected_command == 'create_shards':
+        stores_per_shard = getattr(args, 'stores_per_shard', stores_per_shard)
+
+    if not (create_shards_flag or args.list_shards or run_shard_id):
         parser.print_help()
         return
 
-    shard_manager = ShardManager(stores_per_shard=args.stores_per_shard)
+    shard_manager = ShardManager(stores_per_shard=stores_per_shard)
 
-    if args.create_shards:
+    if create_shards_flag:
         scraper = HomeDepotScraper()
         stores = scraper.get_all_stores()
         shard_manager.create_shards(stores)
@@ -474,12 +489,12 @@ Exemples d'utilisation:
         shard_manager.list_shards()
         return
 
-    if args.run_shard:
+    if run_shard_id:
         print("\n" + "=" * 70)
-        print(f"🚀 DÉMARRAGE DU SCRAPING - SHARD {args.run_shard}")
+        print(f"🚀 DÉMARRAGE DU SCRAPING - SHARD {run_shard_id}")
         print("=" * 70)
 
-        shard_info = shard_manager.load_shard(args.run_shard)
+        shard_info = shard_manager.load_shard(run_shard_id)
         if not shard_info:
             return
 
@@ -489,7 +504,7 @@ Exemples d'utilisation:
         verified_stores = scraper.scrape_shard(shard_info['stores'])
 
         print("\n" + "=" * 70)
-        print(f"✅ SHARD {args.run_shard} TERMINÉ")
+        print(f"✅ SHARD {run_shard_id} TERMINÉ")
         print(f"📦 {len(scraper.products)} produits trouvés")
         print(f"🏪 {verified_stores} magasins vérifiés")
         print("=" * 70)
@@ -498,8 +513,8 @@ Exemples d'utilisation:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        json_filename = os.path.join(output_dir, f"shard_{args.run_shard:02d}_results.json")
-        csv_filename = os.path.join(output_dir, f"shard_{args.run_shard:02d}_results.csv")
+        json_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.json")
+        csv_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.csv")
 
         scraper.save_to_json(json_filename)
         scraper.save_to_csv(csv_filename)
