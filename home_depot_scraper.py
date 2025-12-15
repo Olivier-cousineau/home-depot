@@ -1,12 +1,15 @@
-import requests
-from bs4 import BeautifulSoup
+import argparse
+import csv
 import json
+import os
+import random
+import re
 import time
 from datetime import datetime
-import csv
-import random
-from urllib.parse import urljoin, quote
-import re
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
 
 
 class HomeDepotScraper:
@@ -55,7 +58,7 @@ class HomeDepotScraper:
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
-                    self.update_headers()  # Change User-Agent à chaque retry
+                    self.update_headers()
                     wait_time = min(2 ** attempt + random.uniform(1, 3), 30)
                     print(f"⏳ Attente de {wait_time:.1f}s avant nouvelle tentative...")
                     time.sleep(wait_time)
@@ -64,7 +67,6 @@ class HomeDepotScraper:
 
                 response = self.session.get(url, timeout=30)
 
-                # Détection de CAPTCHA
                 if 'captcha' in response.text.lower() or response.status_code == 403:
                     print("⚠️  CAPTCHA détecté ou accès refusé - Changement de stratégie...")
                     self.smart_delay(10, 20)
@@ -101,28 +103,11 @@ class HomeDepotScraper:
         print("📍 RÉCUPÉRATION DES MAGASINS HOME DEPOT CANADA")
         print("=" * 70)
 
-        # Liste des provinces canadiennes
-        provinces = {
-            'AB': 'Alberta',
-            'BC': 'British Columbia',
-            'MB': 'Manitoba',
-            'NB': 'New Brunswick',
-            'NL': 'Newfoundland and Labrador',
-            'NS': 'Nova Scotia',
-            'ON': 'Ontario',
-            'PE': 'Prince Edward Island',
-            'QC': 'Quebec',
-            'SK': 'Saskatchewan'
-        }
-
-        # Tentative via l'API de localisation
         store_locator_url = f"{self.base_url}/en/store-directory"
         response = self.make_request(store_locator_url)
 
         if response:
             soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Recherche des liens vers les magasins
             store_links = soup.find_all('a', href=re.compile(r'/store-details/'))
 
             for link in store_links:
@@ -130,18 +115,13 @@ class HomeDepotScraper:
                     'url': urljoin(self.base_url, link['href']),
                     'name': link.get_text(strip=True)
                 }
-
-                # Extraction du numéro de magasin depuis l'URL
                 match = re.search(r'/(\d{4})$', link['href'])
                 if match:
                     store_info['store_number'] = match.group(1)
-
                 self.stores.append(store_info)
 
-        # Fallback: génération de numéros de magasins communs
         if not self.stores:
             print("⚠️  Utilisation de la méthode de fallback...")
-            # Numéros de magasins typiques au Canada (7000-7300)
             for store_num in range(7001, 7300):
                 self.stores.append({
                     'store_number': str(store_num),
@@ -156,14 +136,11 @@ class HomeDepotScraper:
         response = self.make_request(store['url'])
         if response and response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Récupération des détails du magasin
             store_name = soup.find(['h1', 'h2'], class_=lambda x: x and 'store' in x.lower() if x else False)
             if store_name:
                 store['name'] = store_name.get_text(strip=True)
                 store['verified'] = True
                 return True
-
         store['verified'] = False
         return False
 
@@ -171,7 +148,6 @@ class HomeDepotScraper:
         """Scrape les produits en liquidation pour un magasin spécifique"""
         print(f"\n🏪 Magasin: {store.get('name', store.get('store_number'))}")
 
-        # URLs possibles pour les liquidations
         clearance_urls = [
             f"{self.base_url}/en/search?q=clearance&storeId={store['store_number']}",
             f"{self.base_url}/fr/recherche?q=liquidation&storeId={store['store_number']}",
@@ -186,8 +162,6 @@ class HomeDepotScraper:
                 continue
 
             soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Recherche des produits
             products = soup.find_all(['div', 'article'], class_=lambda x: x and ('product' in x.lower() or 'pod' in x.lower()) if x else False)
 
             for product_elem in products:
@@ -196,7 +170,7 @@ class HomeDepotScraper:
                     store_products.append(product_info)
 
             if products:
-                break  # Si on trouve des produits, pas besoin d'essayer les autres URLs
+                break
 
         print(f"   ✓ {len(store_products)} produits en liquidation trouvés")
         return store_products
@@ -209,14 +183,12 @@ class HomeDepotScraper:
                 'store_name': store.get('name', 'Unknown')
             }
 
-            # Nom du produit
             name_elem = product_elem.find(['h3', 'h2', 'span', 'a'], class_=lambda x: x and ('title' in x.lower() or 'name' in x.lower()) if x else False)
             if not name_elem:
                 name_elem = product_elem.find('a', class_=lambda x: x and 'product' in x.lower() if x else False)
             if name_elem:
                 product_data['name'] = name_elem.get_text(strip=True)
 
-            # SKU
             sku_elem = product_elem.find(['span', 'div'], string=re.compile(r'(SKU|Model):', re.I))
             if sku_elem:
                 sku_text = sku_elem.get_text(strip=True)
@@ -224,90 +196,60 @@ class HomeDepotScraper:
                 if sku_match:
                     product_data['sku'] = sku_match.group(1)
 
-            # Prix actuel
             price_elem = product_elem.find(['span', 'div'], class_=lambda x: x and 'price' in x.lower() if x else False)
             if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                product_data['price'] = price_text
+                product_data['price'] = price_elem.get_text(strip=True)
 
-            # Prix original / Was Price
             was_price_elem = product_elem.find(['span', 'div'], class_=lambda x: x and ('was' in x.lower() or 'original' in x.lower()) if x else False)
             if was_price_elem:
                 product_data['original_price'] = was_price_elem.get_text(strip=True)
 
-            # Rabais / Économies
             save_elem = product_elem.find(['span', 'div'], class_=lambda x: x and 'save' in x.lower() if x else False)
             if save_elem:
                 product_data['savings'] = save_elem.get_text(strip=True)
 
-            # URL du produit
             link_elem = product_elem.find('a', href=True)
             if link_elem:
                 product_data['url'] = urljoin(self.base_url, link_elem['href'])
 
-            # Image
             img_elem = product_elem.find('img')
             if img_elem:
                 product_data['image'] = img_elem.get('src', img_elem.get('data-src', ''))
 
-            # Badge clearance/liquidation
             badge_elem = product_elem.find(['span', 'div'], class_=lambda x: x and ('clearance' in x.lower() or 'liquidation' in x.lower()) if x else False)
             if badge_elem:
                 product_data['clearance_badge'] = badge_elem.get_text(strip=True)
 
-            # Disponibilité en magasin
             stock_elem = product_elem.find(['span', 'div'], string=re.compile(r'(in stock|en stock|available)', re.I))
             if stock_elem:
                 product_data['availability'] = stock_elem.get_text(strip=True)
 
             product_data['scraped_at'] = datetime.now().isoformat()
 
-            # Ne retourne que si on a au moins un nom
             return product_data if product_data.get('name') else None
 
         except Exception as e:
             print(f"⚠️  Erreur extraction produit: {e}")
             return None
 
-    def scrape_all(self, max_stores=None):
-        """Lance le scraping complet de tous les magasins"""
-        print("\n" + "=" * 70)
-        print("🚀 DÉMARRAGE DU SCRAPER HOME DEPOT CANADA")
-        print("=" * 70)
-
-        # Récupération des magasins
-        self.get_all_stores()
-
-        if max_stores:
-            stores_to_scrape = self.stores[:max_stores]
-            print(f"⚙️  Mode test: scraping de {max_stores} magasins seulement")
-        else:
-            stores_to_scrape = self.stores
-
-        # Vérification et scraping par magasin
+    def scrape_shard(self, shard_stores):
+        """Scrape un shard spécifique de magasins"""
         verified_stores = 0
-        for i, store in enumerate(stores_to_scrape, 1):
-            print(f"\n📊 Progression: {i}/{len(stores_to_scrape)}")
+        for i, store in enumerate(shard_stores, 1):
+            print(f"\n📊 Progression du shard: {i}/{len(shard_stores)}")
 
-            # Vérification périodique du magasin
-            if i % 10 == 0 or not store.get('verified'):
+            if i % 3 == 0 or not store.get('verified'):
                 if self.verify_store(store):
                     verified_stores += 1
 
-            # Scraping des liquidations
             store_products = self.scrape_clearance_for_store(store)
             self.products.extend(store_products)
 
-            # Pause plus longue tous les 5 magasins
-            if i % 5 == 0:
+            if i % 3 == 0:
                 print("⏸️  Pause de sécurité...")
                 self.smart_delay(10, 15)
 
-        print("\n" + "=" * 70)
-        print("✅ SCRAPING TERMINÉ")
-        print(f"📦 {len(self.products)} produits en liquidation trouvés")
-        print(f"🏪 {verified_stores} magasins vérifiés")
-        print("=" * 70)
+        return verified_stores
 
     def save_to_json(self, filename='homedepot_clearance.json'):
         """Sauvegarde en JSON"""
@@ -346,7 +288,6 @@ class HomeDepotScraper:
         print("📊 RÉSUMÉ DES LIQUIDATIONS PAR MAGASIN")
         print("=" * 70)
 
-        # Grouper par magasin
         stores_summary = {}
         for product in self.products:
             store_id = product.get('store_number', 'Unknown')
@@ -359,7 +300,6 @@ class HomeDepotScraper:
             stores_summary[store_id]['count'] += 1
             stores_summary[store_id]['products'].append(product)
 
-        # Top 10 magasins avec le plus de liquidations
         top_stores = sorted(stores_summary.items(), key=lambda x: x[1]['count'], reverse=True)[:10]
 
         print(f"\n🏆 TOP 10 MAGASINS AVEC LE PLUS DE LIQUIDATIONS:")
@@ -375,22 +315,198 @@ class HomeDepotScraper:
                 print(f"   💵 Prix original: {product.get('original_price')}")
             if product.get('savings'):
                 print(f"   💸 Économie: {product.get('savings')}")
-            if product.get('url'):
-                print(f"   🔗 {product.get('url')}")
 
 
-# Utilisation
+class ShardManager:
+    """Gestionnaire de shards pour distribuer les magasins"""
+
+    def __init__(self, stores_per_shard=8):
+        self.stores_per_shard = stores_per_shard
+        self.shards_dir = "shards"
+
+        if not os.path.exists(self.shards_dir):
+            os.makedirs(self.shards_dir)
+            print(f"📁 Dossier '{self.shards_dir}' créé")
+
+    def create_shards(self, stores):
+        """Divise les magasins en shards et sauvegarde les configurations"""
+        shards = []
+        total_shards = (len(stores) + self.stores_per_shard - 1) // self.stores_per_shard
+
+        print("\n" + "=" * 70)
+        print("🔧 CRÉATION DES SHARDS")
+        print("=" * 70)
+        print(f"Total magasins: {len(stores)}")
+        print(f"Magasins par shard: {self.stores_per_shard}")
+        print(f"Nombre de shards: {total_shards}")
+
+        for i in range(0, len(stores), self.stores_per_shard):
+            shard_stores = stores[i:i + self.stores_per_shard]
+            shard_num = len(shards) + 1
+
+            shard_info = {
+                'shard_id': shard_num,
+                'stores': shard_stores,
+                'created_at': datetime.now().isoformat()
+            }
+            shards.append(shard_info)
+
+            shard_filename = os.path.join(self.shards_dir, f"shard_{shard_num:02d}.json")
+            with open(shard_filename, 'w', encoding='utf-8') as f:
+                json.dump(shard_info, f, ensure_ascii=False, indent=2)
+
+            print(f"✅ Shard {shard_num:02d} créé: {len(shard_stores)} magasins -> {shard_filename}")
+
+        manifest = {
+            'total_stores': len(stores),
+            'stores_per_shard': self.stores_per_shard,
+            'total_shards': len(shards),
+            'created_at': datetime.now().isoformat(),
+            'shards': [
+                {
+                    'shard_id': s['shard_id'],
+                    'stores_count': len(s['stores']),
+                    'filename': f"shard_{s['shard_id']:02d}.json"
+                }
+                for s in shards
+            ]
+        }
+
+        manifest_filename = os.path.join(self.shards_dir, 'manifest.json')
+        with open(manifest_filename, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        print(f"\n✅ Manifest créé: {manifest_filename}")
+        return shards
+
+    def load_shard(self, shard_id):
+        """Charge un shard spécifique"""
+        shard_filename = os.path.join(self.shards_dir, f"shard_{shard_id:02d}.json")
+
+        if not os.path.exists(shard_filename):
+            print(f"❌ Shard {shard_id} introuvable: {shard_filename}")
+            return None
+
+        with open(shard_filename, 'r', encoding='utf-8') as f:
+            shard_info = json.load(f)
+
+        print(f"✅ Shard {shard_id} chargé: {len(shard_info['stores'])} magasins")
+        return shard_info
+
+    def list_shards(self):
+        """Liste tous les shards disponibles"""
+        manifest_filename = os.path.join(self.shards_dir, 'manifest.json')
+
+        if not os.path.exists(manifest_filename):
+            print("❌ Aucun manifest trouvé. Créez d'abord les shards avec: python script.py --create-shards")
+            return
+
+        with open(manifest_filename, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+
+        print("\n" + "=" * 70)
+        print("📋 SHARDS DISPONIBLES")
+        print("=" * 70)
+        print(f"Total magasins: {manifest['total_stores']}")
+        print(f"Magasins par shard: {manifest['stores_per_shard']}")
+        print(f"Total shards: {manifest['total_shards']}")
+        print(f"Créés le: {manifest['created_at']}")
+        print("\nListe des shards:")
+
+        for shard in manifest['shards']:
+            print(f"  • Shard {shard['shard_id']:02d}: {shard['stores_count']} magasins ({shard['filename']})")
+
+        print("\n💡 Pour scraper un shard spécifique:")
+        print("   python script.py --run-shard 1")
+        print("   python script.py --run-shard 2")
+        print("   etc.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Home Depot Canada Scraper avec système de shards',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  
+  1. Créer les shards (à faire une seule fois):
+     python script.py --create-shards
+  
+  2. Lister les shards disponibles:
+     python script.py --list-shards
+  
+  3. Scraper un shard spécifique:
+     python script.py --run-shard 1
+     python script.py --run-shard 2
+     python script.py --run-shard 3
+  
+  4. Personnaliser le nombre de magasins par shard:
+     python script.py --create-shards --stores-per-shard 5
+        """
+    )
+
+    parser.add_argument('--create-shards', action='store_true',
+                       help='Créer les shards à partir de tous les magasins')
+    parser.add_argument('--list-shards', action='store_true',
+                       help='Lister tous les shards disponibles')
+    parser.add_argument('--run-shard', type=int, metavar='N',
+                       help='Scraper le shard numéro N')
+    parser.add_argument('--stores-per-shard', type=int, default=8,
+                       help='Nombre de magasins par shard (défaut: 8)')
+
+    args = parser.parse_args()
+
+    if not (args.create_shards or args.list_shards or args.run_shard):
+        parser.print_help()
+        return
+
+    shard_manager = ShardManager(stores_per_shard=args.stores_per_shard)
+
+    if args.create_shards:
+        scraper = HomeDepotScraper()
+        stores = scraper.get_all_stores()
+        shard_manager.create_shards(stores)
+        print("\n✅ Shards créés avec succès!")
+        print("💡 Utilisez --list-shards pour voir la liste")
+        return
+
+    if args.list_shards:
+        shard_manager.list_shards()
+        return
+
+    if args.run_shard:
+        print("\n" + "=" * 70)
+        print(f"🚀 DÉMARRAGE DU SCRAPING - SHARD {args.run_shard}")
+        print("=" * 70)
+
+        shard_info = shard_manager.load_shard(args.run_shard)
+        if not shard_info:
+            return
+
+        scraper = HomeDepotScraper()
+        scraper.stores = shard_info['stores']
+
+        verified_stores = scraper.scrape_shard(shard_info['stores'])
+
+        print("\n" + "=" * 70)
+        print(f"✅ SHARD {args.run_shard} TERMINÉ")
+        print(f"📦 {len(scraper.products)} produits trouvés")
+        print(f"🏪 {verified_stores} magasins vérifiés")
+        print("=" * 70)
+
+        output_dir = "results"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        json_filename = os.path.join(output_dir, f"shard_{args.run_shard:02d}_results.json")
+        csv_filename = os.path.join(output_dir, f"shard_{args.run_shard:02d}_results.csv")
+
+        scraper.save_to_json(json_filename)
+        scraper.save_to_csv(csv_filename)
+        scraper.print_summary()
+
+        print("\n🎉 Script terminé avec succès!")
+
+
 if __name__ == "__main__":
-    scraper = HomeDepotScraper()
-
-    # Mode test: scraper seulement 5 magasins
-    # scraper.scrape_all(max_stores=5)
-
-    # Mode complet: tous les magasins
-    scraper.scrape_all()
-
-    scraper.print_summary()
-    scraper.save_to_json()
-    scraper.save_to_csv()
-
-    print("\n🎉 Script terminé avec succès!")
+    main()
