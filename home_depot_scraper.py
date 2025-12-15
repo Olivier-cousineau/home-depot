@@ -5,7 +5,7 @@ import random
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -70,6 +70,23 @@ class HomeDepotScraper:
         self.products = []
         self.stores = []
         self.update_headers()
+
+    def _slugify(self, text):
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9]+", "-", text)
+        return re.sub(r"-+", "-", text).strip("-")
+
+    def _parse_store_slug(self, store_url, fallback_name=None):
+        parsed = urlparse(store_url)
+        parts = [p for p in parsed.path.split("/") if p]
+
+        if len(parts) >= 3 and parts[-2] != "store-details":
+            return parts[-2]
+
+        if fallback_name:
+            return self._slugify(fallback_name)
+
+        return None
 
     def configure_session(self):
         retry_strategy = Retry(
@@ -223,8 +240,72 @@ class HomeDepotScraper:
                     'url': f"{self.base_url}/store-details/{store_num}"
                 })
 
+        enriched_stores = []
+        for store in self.stores:
+            enriched_stores.append(self._enrich_store(store))
+
+        self.stores = enriched_stores
         print(f"✅ {len(self.stores)} magasins identifiés")
         return self.stores
+
+    def _extract_address_details(self, text):
+        details = {}
+        if not text:
+            return details
+
+        postal_match = re.search(r"([A-Za-z]\d[A-Za-z])\s?-?\s?(\d[A-Za-z]\d)", text)
+        if postal_match:
+            details['postalCode'] = f"{postal_match.group(1)} {postal_match.group(2)}"
+
+        city_prov_match = re.search(r"([A-Za-z\-\.\s]+),\s*([A-Za-z]{2})", text)
+        if city_prov_match:
+            details['city'] = city_prov_match.group(1).strip()
+            details['province'] = city_prov_match.group(2).upper()
+
+        return details
+
+    def _enrich_store(self, store):
+        store_id = store.get('store_number') or store.get('storeId')
+        store_name = store.get('name')
+        store_url = store.get('url')
+
+        store_details = {
+            'storeId': store_id,
+            'store_number': store_id,
+            'url': store_url,
+            'name': store_name,
+        }
+
+        slug = self._parse_store_slug(store_url, fallback_name=store_name)
+        if slug:
+            store_details['slug'] = slug
+
+        response = self.make_request(store_url, store_id=store_id, step="enrich_store", max_retries=4)
+        if response and response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            name_elem = soup.find(['h1', 'h2'], class_=lambda x: x and 'store' in x.lower() if x else False)
+            if name_elem:
+                store_details['name'] = name_elem.get_text(strip=True)
+
+            address_elem = soup.find('address')
+            address_text = " ".join(address_elem.stripped_strings) if address_elem else None
+
+            if not address_text:
+                address_candidates = soup.find_all(string=re.compile(r"[A-Za-z]\d[A-Za-z]"))
+                if address_candidates:
+                    address_text = " ".join([s.strip() for s in address_candidates if s])
+
+            address_info = self._extract_address_details(address_text or "")
+            store_details.update(address_info)
+
+            if 'slug' not in store_details:
+                heading_text = store_details.get('name') or store_name or ""
+                generated_slug = self._slugify(heading_text)
+                if generated_slug:
+                    store_details['slug'] = generated_slug
+
+        return store_details
 
     def verify_store(self, store, deadline=None):
         """Vérifie si un magasin existe et récupère ses détails"""
@@ -581,8 +662,8 @@ def log_shard_overview(shard_info):
         vprint(f"Using shard file: {shard_info['filename']}")
     vprint(f"Stores in shard: {len(stores)}")
     for store in stores:
-        store_id = store.get('store_number') or store.get('storeId') or 'Unknown'
-        name = store.get('name', 'Unknown')
+        store_id = store.get('storeId') or store.get('store_number') or 'Unknown'
+        name = store.get('name') or f"Store {store_id}"
         vprint(f" - {store_id}: {name}")
 
 
