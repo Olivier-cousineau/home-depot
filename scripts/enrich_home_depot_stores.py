@@ -10,7 +10,17 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from home_depot_scraper import build_store_slug
+print("[ENRICH] script loaded OK", flush=True)
+
+
+def build_store_slug(store_id: str, city: str, province: str) -> str:
+    def slugify(s: str) -> str:
+        s = (s or "").strip().lower()
+        s = re.sub(r"[^a-z0-9]+", "-", s)
+        s = re.sub(r"-+", "-").strip("-")
+        return s or "unknown"
+
+    return f"{store_id}-{slugify(city)}-{slugify(province)}"
 
 
 STORE_URL_TEMPLATE = "https://www.homedepot.ca/store-details/{store_id}"
@@ -36,7 +46,8 @@ class Store:
             city=data.get("city") or "",
             province=(data.get("province") or "").upper(),
             postalCode=data.get("postalCode") or "",
-            slug=data.get("slug") or build_store_slug(store_id),
+            slug=data.get("slug")
+            or build_store_slug(store_id, data.get("city") or "", data.get("province") or ""),
         )
 
     def to_dict(self) -> Dict[str, str]:
@@ -65,9 +76,7 @@ class Store:
                 setattr(self, field, new_value)
                 updated = True
 
-        new_slug = build_store_slug(
-            self.storeId, city=self.city, province=self.province, fallback_slug=self.slug
-        )
+        new_slug = build_store_slug(self.storeId, city=self.city, province=self.province)
         if new_slug != self.slug:
             self.slug = new_slug
             updated = True
