@@ -1,5 +1,8 @@
 name: Manual shard runner
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -62,6 +65,16 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Commit & push shards
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add shards/ || true
+          git status --porcelain
+          git commit -m "chore(home-depot): update store shards" || true
+          git push || true
 
       - name: Upload shards manifest
         if: inputs.action == 'create_shards'
