@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -14,11 +15,21 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
+class StoreDeadlineExceeded(Exception):
+    """Raised when a store processing deadline is reached."""
+
+
 class HomeDepotScraper:
     def __init__(self):
         self.base_url = "https://www.homedepot.ca"
         self.api_base = "https://www.homedepot.ca/api"
         self.timeout = (10, 90)
+        self.max_minutes_per_store = int(os.getenv("MAX_MINUTES_PER_STORE", "25"))
+        self.safe_mode = os.getenv("SAFE_MODE", "0") == "1"
+        self.max_concurrency = int(os.getenv("MAX_CONCURRENCY", "4"))
+        if self.safe_mode:
+            self.max_concurrency = min(self.max_concurrency, 2)
+        self.verbose = os.getenv("VERBOSE", "0") == "1"
 
         # Rotation des User-Agents pour éviter la détection
         self.user_agents = [
@@ -84,9 +95,25 @@ class HomeDepotScraper:
             f.write(f"Timestamp: {datetime.now().isoformat()}\n")
         print(f"🧾 Preuve de debug enregistrée: {filename}")
 
-    def make_request(self, url, max_retries=8, use_json=False, store_id=None, step=None):
+    def write_store_error(self, store_id, url, exception):
+        if not os.path.exists("debug"):
+            os.makedirs("debug")
+
+        filename = f"debug/store_{store_id or 'unknown'}_error.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"URL: {url}\n")
+            f.write(f"Exception: {exception}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+        print(f"🧾 Preuve de debug enregistrée: {filename}")
+
+    def _enforce_deadline(self, deadline, store_id=None):
+        if deadline and time.time() > deadline:
+            raise StoreDeadlineExceeded(f"Store {store_id} deadline reached")
+
+    def make_request(self, url, max_retries=8, use_json=False, store_id=None, step=None, deadline=None):
         """Effectue une requête avec retry et rotation de User-Agent"""
         for attempt in range(max_retries):
+            self._enforce_deadline(deadline, store_id)
             try:
                 if attempt > 0:
                     self.update_headers()
@@ -117,6 +144,7 @@ class HomeDepotScraper:
                 print(f"❌ Erreur HTTP {status}: {e}")
                 if status in [403, 429]:
                     self.save_debug_proof(url, e, attempt + 1, store_id, step)
+                    self.write_store_error(store_id, url, e)
                 if e.response.status_code == 429:
                     print("⚠️  Rate limit atteint - Pause prolongée...")
                     time.sleep(60)
@@ -129,10 +157,12 @@ class HomeDepotScraper:
                 print(f"❌ Erreur de connexion: {e}")
                 if isinstance(e, requests.exceptions.Timeout):
                     self.save_debug_proof(url, e, attempt + 1, store_id, step)
+                self.write_store_error(store_id, url, e)
 
             if attempt == max_retries - 1:
                 print(f"❌ Échec après {max_retries} tentatives")
                 self.save_debug_proof(url, Exception("Max retries exceeded"), attempt + 1, store_id, step)
+                self.write_store_error(store_id, url, Exception("Max retries exceeded"))
                 return None
 
         return None
@@ -171,9 +201,10 @@ class HomeDepotScraper:
         print(f"✅ {len(self.stores)} magasins identifiés")
         return self.stores
 
-    def verify_store(self, store):
+    def verify_store(self, store, deadline=None):
         """Vérifie si un magasin existe et récupère ses détails"""
-        response = self.make_request(store['url'], store_id=store.get('store_number'), step="verify_store")
+        self._enforce_deadline(deadline, store.get('store_number'))
+        response = self.make_request(store['url'], store_id=store.get('store_number'), step="verify_store", deadline=deadline)
         if response and response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             store_name = soup.find(['h1', 'h2'], class_=lambda x: x and 'store' in x.lower() if x else False)
@@ -184,7 +215,7 @@ class HomeDepotScraper:
         store['verified'] = False
         return False
 
-    def scrape_clearance_for_store(self, store):
+    def scrape_clearance_for_store(self, store, deadline=None):
         """Scrape les produits en liquidation pour un magasin spécifique"""
         print(f"\n🏪 Magasin: {store.get('name', store.get('store_number'))}")
 
@@ -197,7 +228,8 @@ class HomeDepotScraper:
         store_products = []
 
         for url in clearance_urls:
-            response = self.make_request(url, store_id=store.get('store_number'), step="clearance")
+            self._enforce_deadline(deadline, store.get('store_number'))
+            response = self.make_request(url, store_id=store.get('store_number'), step="clearance", deadline=deadline)
             if not response:
                 continue
 
@@ -205,6 +237,7 @@ class HomeDepotScraper:
             products = soup.find_all(['div', 'article'], class_=lambda x: x and ('product' in x.lower() or 'pod' in x.lower()) if x else False)
 
             for product_elem in products:
+                self._enforce_deadline(deadline, store.get('store_number'))
                 product_info = self.extract_product_info(product_elem, store)
                 if product_info:
                     store_products.append(product_info)
@@ -288,6 +321,57 @@ class HomeDepotScraper:
             if i % 3 == 0:
                 print("⏸️  Pause de sécurité...")
                 self.smart_delay(10, 15)
+
+        return verified_stores
+
+    def _create_store_worker(self):
+        worker = HomeDepotScraper()
+        worker.max_minutes_per_store = self.max_minutes_per_store
+        worker.safe_mode = self.safe_mode
+        worker.max_concurrency = self.max_concurrency
+        worker.verbose = self.verbose
+        return worker
+
+    def process_store(self, store):
+        store_copy = dict(store)
+        store_id = store_copy.get('store_number', 'Unknown')
+        store_products = []
+        verified = False
+        store_start = time.time()
+        deadline = store_start + self.max_minutes_per_store * 60
+        worker = self._create_store_worker()
+
+        try:
+            verified = worker.verify_store(store_copy, deadline=deadline)
+            store_copy['verified'] = verified
+            store_products = worker.scrape_clearance_for_store(store_copy, deadline=deadline)
+        except StoreDeadlineExceeded:
+            print(f"[STORE {store_id}] ⏱️ Max time reached ({self.max_minutes_per_store}m) – stopping store cleanly")
+        except Exception as e:
+            print(f"❌ Erreur lors du traitement du magasin {store_id}: {e}")
+            self.write_store_error(store_id, store_copy.get('url'), e)
+
+        return {
+            'products': store_products,
+            'verified': int(bool(verified))
+        }
+
+    def run_shard_concurrently(self, shard_stores):
+        print(f"[SHARD] Processing {len(shard_stores)} stores with concurrency={self.max_concurrency}")
+        verified_stores = 0
+
+        with ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
+            future_to_store = {executor.submit(self.process_store, store): store for store in shard_stores}
+            for future in as_completed(future_to_store):
+                store = future_to_store[future]
+                try:
+                    result = future.result()
+                    self.products.extend(result.get('products', []))
+                    verified_stores += result.get('verified', 0)
+                except Exception as e:
+                    store_id = store.get('store_number', 'Unknown')
+                    print(f"❌ Exception non gérée pour le magasin {store_id}: {e}")
+                    self.write_store_error(store_id, store.get('url'), e)
 
         return verified_stores
 
@@ -541,7 +625,7 @@ Exemples d'utilisation:
         scraper = HomeDepotScraper()
         scraper.stores = shard_info['stores']
 
-        verified_stores = scraper.scrape_shard(shard_info['stores'])
+        verified_stores = scraper.run_shard_concurrently(shard_info['stores'])
 
         print("\n" + "=" * 70)
         print(f"✅ SHARD {run_shard_id} TERMINÉ")

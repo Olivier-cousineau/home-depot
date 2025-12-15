@@ -25,6 +25,11 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      MAX_MINUTES_PER_STORE: "25"
+      MAX_CONCURRENCY: "4"
+      VERBOSE: "1"
+      SAFE_MODE: "1"
 
     steps:
       - name: Checkout repository
