@@ -209,43 +209,40 @@ class HomeDepotScraper:
 
         return None
 
-    def get_all_stores(self):
-        """Récupère la liste de tous les magasins Home Depot au Canada"""
+    def get_all_stores(self, stores_file="data/home_depot_stores.json"):
+        """Charge la liste des magasins à partir d'un fichier local versionné."""
         print("\n" + "=" * 70)
-        print("📍 RÉCUPÉRATION DES MAGASINS HOME DEPOT CANADA")
+        print("📍 CHARGEMENT DES MAGASINS HOME DEPOT CANADA (SOURCE LOCALE)")
         print("=" * 70)
 
-        store_locator_url = f"{self.base_url}/en/store-directory"
-        response = self.make_request(store_locator_url)
-
-        if response:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            store_links = soup.find_all('a', href=re.compile(r'/store-details/'))
-
-            for link in store_links:
-                store_info = {
-                    'url': urljoin(self.base_url, link['href']),
-                    'name': link.get_text(strip=True)
-                }
-                match = re.search(r'/(\d{4})$', link['href'])
-                if match:
-                    store_info['store_number'] = match.group(1)
-                self.stores.append(store_info)
-
-        if not self.stores:
-            print("⚠️  Utilisation de la méthode de fallback...")
-            for store_num in range(7001, 7300):
-                self.stores.append({
-                    'store_number': str(store_num),
-                    'url': f"{self.base_url}/store-details/{store_num}"
-                })
+        try:
+            with open(stores_file, "r", encoding="utf-8") as f:
+                local_stores = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Le fichier {stores_file} est introuvable. Assurez-vous qu'il est versionné."
+            )
 
         enriched_stores = []
-        for store in self.stores:
-            enriched_stores.append(self._enrich_store(store))
+        for store in local_stores:
+            store_id = store.get("storeId") or store.get("store_number")
+            store_details = {
+                "storeId": store_id,
+                "store_number": store_id,
+                "name": store.get("name"),
+                "city": store.get("city"),
+                "province": store.get("province"),
+                "postalCode": store.get("postalCode"),
+                "slug": store.get("slug"),
+                "url": f"{self.base_url}/store-details/{store_id}",
+            }
+
+            enriched_stores.append(store_details)
 
         self.stores = enriched_stores
-        print(f"✅ {len(self.stores)} magasins identifiés")
+        print(
+            f"✅ {len(self.stores)} magasins chargés depuis {stores_file} (aucun appel réseau)"
+        )
         return self.stores
 
     def _extract_address_details(self, text):
@@ -438,6 +435,13 @@ class HomeDepotScraper:
         worker.verbose = self.verbose
         return worker
 
+    def _format_store_label(self, store):
+        store_id = store.get('store_number') or store.get('storeId') or 'Unknown'
+        location_parts = [store.get('city'), store.get('province')]
+        location = ", ".join([p for p in location_parts if p])
+        display = location or store.get('name') or f"Store {store_id}"
+        return f"[STORE {store_id}] {display}"
+
     def process_store(self, store):
         store_copy = dict(store)
         store_id = store_copy.get('store_number', 'Unknown')
@@ -446,6 +450,8 @@ class HomeDepotScraper:
         store_start = time.time()
         deadline = store_start + self.max_minutes_per_store * 60
         worker = self._create_store_worker()
+
+        print(self._format_store_label(store_copy))
 
         try:
             verified = worker.verify_store(store_copy, deadline=deadline)

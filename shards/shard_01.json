@@ -2,37 +2,85 @@
   "shard_id": 1,
   "stores": [
     {
+      "storeId": "7001",
+      "name": "Saint-Jérôme",
+      "city": "Saint-Jérôme",
+      "province": "QC",
+      "postalCode": "",
+      "slug": "saint-jerome",
       "store_number": "7001",
       "url": "https://www.homedepot.ca/store-details/7001"
     },
     {
+      "storeId": "7002",
+      "name": "Home Depot 7002",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7002",
       "store_number": "7002",
       "url": "https://www.homedepot.ca/store-details/7002"
     },
     {
+      "storeId": "7003",
+      "name": "Home Depot 7003",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7003",
       "store_number": "7003",
       "url": "https://www.homedepot.ca/store-details/7003"
     },
     {
+      "storeId": "7004",
+      "name": "Home Depot 7004",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7004",
       "store_number": "7004",
       "url": "https://www.homedepot.ca/store-details/7004"
     },
     {
+      "storeId": "7005",
+      "name": "Home Depot 7005",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7005",
       "store_number": "7005",
       "url": "https://www.homedepot.ca/store-details/7005"
     },
     {
+      "storeId": "7006",
+      "name": "Home Depot 7006",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7006",
       "store_number": "7006",
       "url": "https://www.homedepot.ca/store-details/7006"
     },
     {
+      "storeId": "7007",
+      "name": "Home Depot 7007",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7007",
       "store_number": "7007",
       "url": "https://www.homedepot.ca/store-details/7007"
     },
     {
+      "storeId": "7008",
+      "name": "Home Depot 7008",
+      "city": "",
+      "province": "",
+      "postalCode": "",
+      "slug": "store-7008",
       "store_number": "7008",
       "url": "https://www.homedepot.ca/store-details/7008"
     }
   ],
-  "created_at": "2025-12-15T13:45:07.073233"
+  "created_at": "2025-12-15T19:20:47.943575"
 }
