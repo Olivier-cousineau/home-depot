@@ -1,0 +1,38 @@
+{
+  "shard_id": 31,
+  "stores": [
+    {
+      "store_number": "7241",
+      "url": "https://www.homedepot.ca/store-details/7241"
+    },
+    {
+      "store_number": "7242",
+      "url": "https://www.homedepot.ca/store-details/7242"
+    },
+    {
+      "store_number": "7243",
+      "url": "https://www.homedepot.ca/store-details/7243"
+    },
+    {
+      "store_number": "7244",
+      "url": "https://www.homedepot.ca/store-details/7244"
+    },
+    {
+      "store_number": "7245",
+      "url": "https://www.homedepot.ca/store-details/7245"
+    },
+    {
+      "store_number": "7246",
+      "url": "https://www.homedepot.ca/store-details/7246"
+    },
+    {
+      "store_number": "7247",
+      "url": "https://www.homedepot.ca/store-details/7247"
+    },
+    {
+      "store_number": "7248",
+      "url": "https://www.homedepot.ca/store-details/7248"
+    }
+  ],
+  "created_at": "2025-12-15T13:45:07.077573"
+}

@@ -1,0 +1,198 @@
+{
+  "total_stores": 299,
+  "stores_per_shard": 8,
+  "total_shards": 38,
+  "created_at": "2025-12-15T13:45:07.078258",
+  "shards": [
+    {
+      "shard_id": 1,
+      "stores_count": 8,
+      "filename": "shard_01.json"
+    },
+    {
+      "shard_id": 2,
+      "stores_count": 8,
+      "filename": "shard_02.json"
+    },
+    {
+      "shard_id": 3,
+      "stores_count": 8,
+      "filename": "shard_03.json"
+    },
+    {
+      "shard_id": 4,
+      "stores_count": 8,
+      "filename": "shard_04.json"
+    },
+    {
+      "shard_id": 5,
+      "stores_count": 8,
+      "filename": "shard_05.json"
+    },
+    {
+      "shard_id": 6,
+      "stores_count": 8,
+      "filename": "shard_06.json"
+    },
+    {
+      "shard_id": 7,
+      "stores_count": 8,
+      "filename": "shard_07.json"
+    },
+    {
+      "shard_id": 8,
+      "stores_count": 8,
+      "filename": "shard_08.json"
+    },
+    {
+      "shard_id": 9,
+      "stores_count": 8,
+      "filename": "shard_09.json"
+    },
+    {
+      "shard_id": 10,
+      "stores_count": 8,
+      "filename": "shard_10.json"
+    },
+    {
+      "shard_id": 11,
+      "stores_count": 8,
+      "filename": "shard_11.json"
+    },
+    {
+      "shard_id": 12,
+      "stores_count": 8,
+      "filename": "shard_12.json"
+    },
+    {
+      "shard_id": 13,
+      "stores_count": 8,
+      "filename": "shard_13.json"
+    },
+    {
+      "shard_id": 14,
+      "stores_count": 8,
+      "filename": "shard_14.json"
+    },
+    {
+      "shard_id": 15,
+      "stores_count": 8,
+      "filename": "shard_15.json"
+    },
+    {
+      "shard_id": 16,
+      "stores_count": 8,
+      "filename": "shard_16.json"
+    },
+    {
+      "shard_id": 17,
+      "stores_count": 8,
+      "filename": "shard_17.json"
+    },
+    {
+      "shard_id": 18,
+      "stores_count": 8,
+      "filename": "shard_18.json"
+    },
+    {
+      "shard_id": 19,
+      "stores_count": 8,
+      "filename": "shard_19.json"
+    },
+    {
+      "shard_id": 20,
+      "stores_count": 8,
+      "filename": "shard_20.json"
+    },
+    {
+      "shard_id": 21,
+      "stores_count": 8,
+      "filename": "shard_21.json"
+    },
+    {
+      "shard_id": 22,
+      "stores_count": 8,
+      "filename": "shard_22.json"
+    },
+    {
+      "shard_id": 23,
+      "stores_count": 8,
+      "filename": "shard_23.json"
+    },
+    {
+      "shard_id": 24,
+      "stores_count": 8,
+      "filename": "shard_24.json"
+    },
+    {
+      "shard_id": 25,
+      "stores_count": 8,
+      "filename": "shard_25.json"
+    },
+    {
+      "shard_id": 26,
+      "stores_count": 8,
+      "filename": "shard_26.json"
+    },
+    {
+      "shard_id": 27,
+      "stores_count": 8,
+      "filename": "shard_27.json"
+    },
+    {
+      "shard_id": 28,
+      "stores_count": 8,
+      "filename": "shard_28.json"
+    },
+    {
+      "shard_id": 29,
+      "stores_count": 8,
+      "filename": "shard_29.json"
+    },
+    {
+      "shard_id": 30,
+      "stores_count": 8,
+      "filename": "shard_30.json"
+    },
+    {
+      "shard_id": 31,
+      "stores_count": 8,
+      "filename": "shard_31.json"
+    },
+    {
+      "shard_id": 32,
+      "stores_count": 8,
+      "filename": "shard_32.json"
+    },
+    {
+      "shard_id": 33,
+      "stores_count": 8,
+      "filename": "shard_33.json"
+    },
+    {
+      "shard_id": 34,
+      "stores_count": 8,
+      "filename": "shard_34.json"
+    },
+    {
+      "shard_id": 35,
+      "stores_count": 8,
+      "filename": "shard_35.json"
+    },
+    {
+      "shard_id": 36,
+      "stores_count": 8,
+      "filename": "shard_36.json"
+    },
+    {
+      "shard_id": 37,
+      "stores_count": 8,
+      "filename": "shard_37.json"
+    },
+    {
+      "shard_id": 38,
+      "stores_count": 3,
+      "filename": "shard_38.json"
+    }
+  ]
+}
