@@ -123,7 +123,7 @@ class HomeDepotScraper:
 
                 print(f"🔍 Requête: {url[:80]}... (Tentative {attempt + 1}/{max_retries})")
                 start_time = time.monotonic()
-                response = self.session.get(url, timeout=self.timeout, headers=self.session.headers)
+                response = safe_get(self.session, url, timeout=self.timeout, headers=self.session.headers)
                 duration = time.monotonic() - start_time
                 print(f"🌐 URL: {url} | Status: {response.status_code} | Temps: {duration:.2f}s")
 
@@ -516,6 +516,7 @@ class ShardManager:
         with open(shard_filename, 'r', encoding='utf-8') as f:
             shard_info = json.load(f)
 
+        shard_info['filename'] = shard_filename
         print(f"Stores in shard: {len(shard_info['stores'])}")
         print(f"✅ Shard {shard_id} chargé: {len(shard_info['stores'])} magasins")
         return shard_info
@@ -547,6 +548,17 @@ class ShardManager:
         print("   python script.py --run-shard 1")
         print("   python script.py --run-shard 2")
         print("   etc.")
+
+
+def log_shard_overview(shard_info):
+    stores = shard_info.get('stores', [])
+    if shard_info.get('filename'):
+        vprint(f"Using shard file: {shard_info['filename']}")
+    vprint(f"Stores in shard: {len(stores)}")
+    for store in stores:
+        store_id = store.get('store_number') or store.get('storeId') or 'Unknown'
+        name = store.get('name', 'Unknown')
+        vprint(f" - {store_id}: {name}")
 
 
 def main():
@@ -584,8 +596,14 @@ Exemples d'utilisation:
                        help='Scraper le shard numéro N (compatibilité)')
     parser.add_argument('--stores-per-shard', type=int, default=8,
                        help='Nombre de magasins par shard (défaut: 8)')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Activer les logs détaillés (ou utiliser VERBOSE=1)')
 
     args = parser.parse_args()
+
+    global VERBOSE
+    if args.verbose:
+        VERBOSE = True
 
     selected_command = args.command
     create_shards_flag = args.create_shards or selected_command == 'create_shards'
@@ -621,6 +639,8 @@ Exemples d'utilisation:
         shard_info = shard_manager.load_shard(run_shard_id)
         if not shard_info:
             return
+
+        log_shard_overview(shard_info)
 
         scraper = HomeDepotScraper()
         scraper.stores = shard_info['stores']
