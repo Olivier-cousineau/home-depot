@@ -1,0 +1,52 @@
+name: Home Depot - Shard 15/38
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: home-depot-shard-15
+  cancel-in-progress: false
+
+jobs:
+  run-shard-15:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests beautifulsoup4
+          fi
+
+      - name: Run shard 15
+        run: python home_depot_scraper.py run_shard --shard 15
+
+      - name: Commit & push results
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/ outputs/ shards/ results/ || true
+          git commit -m "chore(home-depot): update shard 15 results" || true
+          git push || true
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-15-results
+          path: |
+            public/**
+            results/**
