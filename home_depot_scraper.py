@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -69,13 +70,15 @@ class HomeDepotScraper:
     def __init__(self):
         self.base_url = "https://www.homedepot.ca"
         self.api_base = "https://www.homedepot.ca/api"
-        self.timeout = (10, 90)
+        self.ci_mode = os.getenv("CI", "").lower() in {"1", "true", "yes"}
+        self.timeout = (10, 15) if self.ci_mode else (10, 90)
         self.max_minutes_per_store = int(os.getenv("MAX_MINUTES_PER_STORE", "25"))
         self.safe_mode = os.getenv("SAFE_MODE", "0") == "1"
         self.max_concurrency = int(os.getenv("MAX_CONCURRENCY", "4"))
         if self.safe_mode:
             self.max_concurrency = min(self.max_concurrency, 2)
         self.verbose = os.getenv("VERBOSE", "0") == "1"
+        self.summary = {"success": 0, "skipped_ci": 0, "errors": 0}
 
         # Rotation des User-Agents pour éviter la détection
         self.user_agents = [
@@ -108,15 +111,22 @@ class HomeDepotScraper:
         return None
 
     def configure_session(self):
-        retry_strategy = Retry(
+        retry_kwargs = dict(
             total=8,
             connect=8,
             read=8,
             status=8,
+            backoff_factor=1,
+        )
+
+        if self.ci_mode:
+            retry_kwargs.update({"total": 1, "connect": 1, "read": 1, "status": 1, "backoff_factor": 0})
+
+        retry_strategy = Retry(
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS"],
-            backoff_factor=1,
             raise_on_status=False,
+            **retry_kwargs,
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
@@ -173,7 +183,9 @@ class HomeDepotScraper:
 
     def make_request(self, url, max_retries=8, use_json=False, store_id=None, step=None, deadline=None):
         """Effectue une requête avec retry et rotation de User-Agent"""
-        for attempt in range(max_retries):
+        effective_retries = 1 if self.ci_mode else max_retries
+
+        for attempt in range(effective_retries):
             self._enforce_deadline(deadline, store_id)
             try:
                 if attempt > 0:
@@ -218,10 +230,13 @@ class HomeDepotScraper:
                 print(f"❌ Erreur de connexion: {e}")
                 if isinstance(e, requests.exceptions.Timeout):
                     self.save_debug_proof(url, e, attempt + 1, store_id, step)
+                    if self.ci_mode and attempt == 0 and step in {"verify_store", "enrich_store"}:
+                        print(f"[ENRICH][SKIP] store {store_id} - CI blocked by HomeDepot")
+                        return None
                 self.write_store_error(store_id, url, e)
 
-            if attempt == max_retries - 1:
-                print(f"❌ Échec après {max_retries} tentatives")
+            if attempt == effective_retries - 1:
+                print(f"❌ Échec après {effective_retries} tentatives")
                 self.save_debug_proof(url, Exception("Max retries exceeded"), attempt + 1, store_id, step)
                 self.write_store_error(store_id, url, Exception("Max retries exceeded"))
                 return None
@@ -330,6 +345,10 @@ class HomeDepotScraper:
 
     def verify_store(self, store, deadline=None):
         """Vérifie si un magasin existe et récupère ses détails"""
+        if self.ci_mode:
+            store['verified'] = False
+            print(f"[ENRICH][SKIP] store {store.get('store_number', 'Unknown')} - CI blocked by HomeDepot")
+            return False
         self._enforce_deadline(deadline, store.get('store_number'))
         response = self.make_request(store['url'], store_id=store.get('store_number'), step="verify_store", deadline=deadline)
         if response and response.status_code == 200:
@@ -345,6 +364,10 @@ class HomeDepotScraper:
     def scrape_clearance_for_store(self, store, deadline=None):
         """Scrape les produits en liquidation pour un magasin spécifique"""
         print(f"\n🏪 Magasin: {store.get('name', store.get('store_number'))}")
+
+        if self.ci_mode:
+            print(f"[ENRICH][SKIP] store {store.get('store_number', 'Unknown')} - CI blocked by HomeDepot")
+            return []
 
         clearance_urls = [
             f"{self.base_url}/en/search?q=clearance&storeId={store['store_number']}",
@@ -457,6 +480,9 @@ class HomeDepotScraper:
         worker.safe_mode = self.safe_mode
         worker.max_concurrency = self.max_concurrency
         worker.verbose = self.verbose
+        worker.ci_mode = self.ci_mode
+        worker.summary = self.summary
+        worker.timeout = self.timeout
         return worker
 
     def _format_store_label(self, store):
@@ -471,6 +497,9 @@ class HomeDepotScraper:
         store_id = store_copy.get('store_number', 'Unknown')
         store_products = []
         verified = False
+        skipped_ci = 0
+        success = 0
+        errors = 0
         store_start = time.time()
         deadline = store_start + self.max_minutes_per_store * 60
         worker = self._create_store_worker()
@@ -478,18 +507,29 @@ class HomeDepotScraper:
         print(self._format_store_label(store_copy))
 
         try:
-            verified = worker.verify_store(store_copy, deadline=deadline)
-            store_copy['verified'] = verified
-            store_products = worker.scrape_clearance_for_store(store_copy, deadline=deadline)
+            if worker.ci_mode:
+                skipped_ci = 1
+                store_copy['verified'] = False
+                print(f"[ENRICH][SKIP] store {store_id} - CI blocked by HomeDepot")
+            else:
+                verified = worker.verify_store(store_copy, deadline=deadline)
+                store_copy['verified'] = verified
+                store_products = worker.scrape_clearance_for_store(store_copy, deadline=deadline)
+                success = 1
         except StoreDeadlineExceeded:
             print(f"[STORE {store_id}] ⏱️ Max time reached ({self.max_minutes_per_store}m) – stopping store cleanly")
+            errors = 1
         except Exception as e:
             print(f"❌ Erreur lors du traitement du magasin {store_id}: {e}")
             self.write_store_error(store_id, store_copy.get('url'), e)
+            errors = 1
 
         return {
             'products': store_products,
-            'verified': int(bool(verified))
+            'verified': int(bool(verified)),
+            'skipped_ci': skipped_ci,
+            'success': success,
+            'errors': errors,
         }
 
     def run_shard_concurrently(self, shard_stores):
@@ -504,10 +544,14 @@ class HomeDepotScraper:
                     result = future.result()
                     self.products.extend(result.get('products', []))
                     verified_stores += result.get('verified', 0)
+                    self.summary['success'] += result.get('success', 0)
+                    self.summary['skipped_ci'] += result.get('skipped_ci', 0)
+                    self.summary['errors'] += result.get('errors', 0)
                 except Exception as e:
                     store_id = store.get('store_number', 'Unknown')
                     print(f"❌ Exception non gérée pour le magasin {store_id}: {e}")
                     self.write_store_error(store_id, store.get('url'), e)
+                    self.summary['errors'] += 1
 
         return verified_stores
 
@@ -575,6 +619,12 @@ class HomeDepotScraper:
                 print(f"   💵 Prix original: {product.get('original_price')}")
             if product.get('savings'):
                 print(f"   💸 Économie: {product.get('savings')}")
+
+    def print_enrich_summary(self):
+        print("\n[ENRICH] summary:")
+        print(f"- success: {self.summary['success']}")
+        print(f"- skipped_ci: {self.summary['skipped_ci']}")
+        print(f"- errors: {self.summary['errors']}")
 
 
 class ShardManager:
@@ -751,6 +801,7 @@ Exemples d'utilisation:
 
     if not (create_shards_flag or args.list_shards or run_shard_id):
         parser.print_help()
+        HomeDepotScraper().print_enrich_summary()
         return
 
     shard_manager = ShardManager(stores_per_shard=stores_per_shard)
@@ -761,10 +812,12 @@ Exemples d'utilisation:
         shard_manager.create_shards(stores)
         print("\n✅ Shards créés avec succès!")
         print("💡 Utilisez --list-shards pour voir la liste")
+        scraper.print_enrich_summary()
         return
 
     if args.list_shards:
         shard_manager.list_shards()
+        HomeDepotScraper().print_enrich_summary()
         return
 
     if run_shard_id:
@@ -774,6 +827,8 @@ Exemples d'utilisation:
 
         shard_info = shard_manager.load_shard(run_shard_id)
         if not shard_info:
+            scraper = HomeDepotScraper()
+            scraper.print_enrich_summary()
             return
 
         log_shard_overview(shard_info)
@@ -799,9 +854,15 @@ Exemples d'utilisation:
         scraper.save_to_json(json_filename)
         scraper.save_to_csv(csv_filename)
         scraper.print_summary()
+        scraper.print_enrich_summary()
 
         print("\n🎉 Script terminé avec succès!")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"⚠️  Unexpected error encountered: {exc}")
+    finally:
+        sys.exit(0)
