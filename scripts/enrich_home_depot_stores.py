@@ -41,6 +41,7 @@ class Store:
     province: str
     postalCode: str
     slug: str
+    enrich_status: str = "ok"
 
     @classmethod
     def from_dict(cls, data: Dict[str, str]) -> "Store":
@@ -53,6 +54,7 @@ class Store:
             postalCode=data.get("postalCode") or "",
             slug=data.get("slug")
             or build_store_slug(store_id, data.get("city") or "", data.get("province") or ""),
+            enrich_status=data.get("enrich_status") or "ok",
         )
 
     def to_dict(self) -> Dict[str, str]:
@@ -63,6 +65,7 @@ class Store:
             "province": self.province,
             "postalCode": self.postalCode,
             "slug": self.slug,
+            "enrich_status": self.enrich_status,
         }
 
     def needs_enrichment(self) -> bool:
@@ -91,16 +94,7 @@ class Store:
 
 def _configure_session() -> requests.Session:
     session = requests.Session()
-    retry_strategy = Retry(
-        total=5,
-        connect=5,
-        read=5,
-        status=5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-        backoff_factor=1,
-        raise_on_status=False,
-    )
+    retry_strategy = Retry(total=0, connect=0, read=0, status=0, raise_on_status=False)
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
@@ -310,6 +304,7 @@ def main() -> None:
     args = _parse_args()
     max_stores = _get_max_stores(args.max_stores)
     dry_run = _is_dry_run(args.dry_run)
+    skip_timeouts = os.getenv("ENRICH_SKIP_TIMEOUTS", "0") == "1"
 
     try:
         stores = load_stores()
@@ -319,12 +314,16 @@ def main() -> None:
 
     session = _configure_session()
     enriched_count = 0
+    success_count = 0
+    timeout_count = 0
+    error_count = 0
     target_stores: List[Store] = []
     for store in stores:
         if store.needs_enrichment():
             target_stores.append(store)
         else:
             store.apply_details({})
+            store.enrich_status = store.enrich_status or "ok"
 
     total_targets = len(target_stores)
     limit = min(total_targets, max_stores) if max_stores else total_targets
@@ -337,24 +336,66 @@ def main() -> None:
             f"[ENRICH] Processing store {idx}/{limit} - {store.storeId} - {store.name}",
             flush=True,
         )
-        try:
-            details = fetch_store_details(session, store.storeId)
-            if not details:
-                print(f"[ENRICH][ERROR] store {store.storeId} no data returned")
-                continue
+        attempts_allowed = 1 if skip_timeouts else 2
+        attempts_made = 0
+        while attempts_made < attempts_allowed:
+            attempts_made += 1
+            try:
+                details = fetch_store_details(session, store.storeId)
+                if not details:
+                    print(f"[ENRICH][ERROR] store {store.storeId} no data returned")
+                    store.enrich_status = "error"
+                    error_count += 1
+                    break
 
-            updated = store.apply_details(details)
-            if updated:
-                enriched_count += 1
-            duration = time.monotonic() - start_time
-            print(
-                f"[ENRICH] Done store {store.storeId} in {duration:.2f}s",
-                flush=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            duration = time.monotonic() - start_time
-            print(f"[ENRICH][ERROR] store {store.storeId} {exc} ({duration:.2f}s)")
-            continue
+                updated = store.apply_details(details)
+                store.enrich_status = "ok"
+                if updated:
+                    enriched_count += 1
+                duration = time.monotonic() - start_time
+                success_count += 1
+                print(
+                    f"[ENRICH] Done store {store.storeId} in {duration:.2f}s",
+                    flush=True,
+                )
+                break
+            except requests.exceptions.Timeout as exc:
+                if attempts_made >= attempts_allowed:
+                    duration = time.monotonic() - start_time
+                    timeout_count += 1
+                    store.enrich_status = "timeout"
+                    print(
+                        f"[ENRICH][SKIP] store {store.storeId} after {attempts_made} retries (timeout) ({duration:.2f}s)",
+                        flush=True,
+                    )
+                    break
+                print(
+                    f"[ENRICH][RETRY] store {store.storeId} timeout on attempt {attempts_made}/{attempts_allowed}",
+                    flush=True,
+                )
+                continue
+            except requests.exceptions.HTTPError as exc:
+                if attempts_made >= attempts_allowed:
+                    duration = time.monotonic() - start_time
+                    error_count += 1
+                    store.enrich_status = "error"
+                    status_code = exc.response.status_code if exc.response else "unknown"
+                    print(
+                        f"[ENRICH][SKIP] store {store.storeId} after {attempts_made} retries (http {status_code}) ({duration:.2f}s)",
+                        flush=True,
+                    )
+                    break
+                print(
+                    f"[ENRICH][RETRY] store {store.storeId} HTTP error on attempt {attempts_made}/{attempts_allowed}",
+                    flush=True,
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001
+                duration = time.monotonic() - start_time
+                error_count += 1
+                store.enrich_status = "error"
+                print(f"[ENRICH][ERROR] store {store.storeId} {exc} ({duration:.2f}s)")
+                break
 
     if dry_run:
         print("[ENRICH] DRY_RUN enabled - no changes will be written")
@@ -362,6 +403,7 @@ def main() -> None:
         save_stores(stores)
         print(f"[ENRICH] Saved updates to {DEFAULT_STORES_PATH}")
 
+    print(f"[ENRICH] done: {success_count} success / {timeout_count} timeout / {error_count} error", flush=True)
     print(
         f"✅ Enrichment complete: enriched {enriched_count}/{limit} processed stores.",
         flush=True,
