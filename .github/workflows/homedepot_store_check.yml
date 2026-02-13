@@ -1,0 +1,80 @@
+name: Home Depot store offers check
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_stores:
+        description: "Maximum stores to process"
+        required: false
+        default: "5"
+      max_skus:
+        description: "Optional maximum SKUs"
+        required: false
+        default: ""
+      sleep_seconds:
+        description: "Sleep between SKU checks"
+        required: false
+        default: "0.5"
+  schedule:
+    - cron: "15 7 * * *"
+
+jobs:
+  check-store-offers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run store offer checker
+        env:
+          INPUT_MAX_STORES: ${{ github.event.inputs.max_stores }}
+          INPUT_MAX_SKUS: ${{ github.event.inputs.max_skus }}
+          INPUT_SLEEP: ${{ github.event.inputs.sleep_seconds }}
+        run: |
+          MAX_STORES="${INPUT_MAX_STORES:-5}"
+          SLEEP_SECONDS="${INPUT_SLEEP:-0.5}"
+          MAX_SKUS_ARGS=""
+
+          if [ -n "${INPUT_MAX_SKUS}" ]; then
+            MAX_SKUS_ARGS="--max-skus ${INPUT_MAX_SKUS}"
+          fi
+
+          python scripts/check_homedepot_store_offers.py \
+            --stores data/home_depot_stores.json \
+            --skus data/homedepot_liquidations.json \
+            --max-stores "${MAX_STORES}" \
+            --sleep "${SLEEP_SECONDS}" \
+            ${MAX_SKUS_ARGS}
+
+      - name: Commit generated JSON
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git status --short
+          if [ -n "$(git status --porcelain public/homedepot public/index/homedepot-deals.json)" ]; then
+            git add public/homedepot public/index/homedepot-deals.json
+            git commit -m "chore: refresh Home Depot store offers"
+          else
+            echo "No generated changes"
+          fi
+
+      - name: Push changes
+        run: |
+          if [ -n "$(git log --oneline origin/$(git branch --show-current)..HEAD)" ]; then
+            git push
+          else
+            echo "No commits to push"
+          fi

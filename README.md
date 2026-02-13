@@ -46,3 +46,40 @@ Un workflow GitHub Actions est disponible pour déclencher ces commandes sans li
    - `shards` après `create_shards` (manifest.json et fichiers shard_XX.json).
    - `shard-<ID>-results` après `run_shard` (résultats CSV/JSON du shard lancé).
 
+
+## Vérifier les offres par magasin (prix + stock)
+
+Un script dédié permet de vérifier des SKU (liquidations) sur les **N premiers magasins** de `data/home_depot_stores.json` en utilisant Playwright pour définir le contexte magasin via l'UI.
+
+### Script
+
+```bash
+python scripts/check_homedepot_store_offers.py \
+  --stores data/home_depot_stores.json \
+  --skus data/homedepot_liquidations.json \
+  --max-stores 5 \
+  --sleep 0.5
+```
+
+### Options utiles
+
+- `--max-stores` (défaut: `5`) : nombre maximum de magasins.
+- `--max-skus` : limite le nombre de SKU traités par magasin.
+- `--sleep` (défaut: `0.5`) : pause douce entre chaque SKU.
+- `--retries` (défaut: `2`) : nombre limité de retries en cas d'échec UI/réseau.
+- `--output-dir` (défaut: `public/homedepot`) : JSON unitaire par magasin (`<store_slug>.json`).
+- `--index-output` (défaut: `public/index/homedepot-deals.json`) : fichier agrégé.
+
+### Dépendances
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+### Sorties
+
+- `public/homedepot/<store_slug>.json`
+- `public/index/homedepot-deals.json`
+
+Le script produit un JSON stable (`indent=2`, clés triées) et ajoute `store_offer.status="unknown"` en fallback si le contexte magasin ne peut pas être appliqué.
