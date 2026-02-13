@@ -54,7 +54,7 @@ jobs:
 
           python scripts/check_homedepot_store_offers.py \
             --stores data/home_depot_stores.json \
-            --skus data/homedepot_liquidations.json \
+            --skus data/skus_only.json \
             --max-stores "${MAX_STORES}" \
             --sleep "${SLEEP_SECONDS}" \
             ${MAX_SKUS_ARGS}
