@@ -18,6 +18,8 @@ DEFAULT_INDEX_PATH = Path("public/index/homedepot-deals.json")
 DEFAULT_MAX_STORES = 5
 DEFAULT_SLEEP = 0.5
 REQUEST_TIMEOUT_MS = 45_000
+WARMUP_PAUSE_MS = 1_000
+STORE_HTTP2_FALLBACK_RETRIES = 2
 
 
 @dataclass
@@ -321,6 +323,30 @@ def _check_one_sku(page: "Page", store: Store, sku: Dict[str, Any], retries: int
     }
 
 
+def _is_http2_protocol_error(error_message: Optional[str]) -> bool:
+    if not error_message:
+        return False
+    return "ERR_HTTP2_PROTOCOL_ERROR" in error_message
+
+
+def _warmup_store(page: "Page", store: Store, retries: int) -> bool:
+    context_set = False
+    for attempt in range(1, retries + 2):
+        try:
+            page.goto("https://www.homedepot.ca/", wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
+            page.wait_for_timeout(WARMUP_PAUSE_MS)
+            context_set = _set_store_context(page, store)
+            page.wait_for_timeout(WARMUP_PAUSE_MS)
+            return context_set
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[STORE-CHECK][WARMUP-RETRY] store={store.storeId} attempt={attempt} error: {exc}",
+                flush=True,
+            )
+            page.wait_for_timeout(600)
+    return context_set
+
+
 def _base_item(store: Store, sku: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "retailer": "homedepot",
@@ -357,14 +383,9 @@ def _run_for_store(
     print(f"[STORE-CHECK] start store={store.storeId} city={store.city}", flush=True)
     page = context.new_page()
     offers: List[Dict[str, Any]] = []
-    context_set = False
-    try:
-        page.goto("https://www.homedepot.ca/", wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
-        page.wait_for_timeout(800)
-        context_set = _set_store_context(page, store)
-        page.wait_for_timeout(1200)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[STORE-CHECK][WARN] store={store.storeId} unable to set context once: {exc}", flush=True)
+    context_set = _warmup_store(page, store, retries)
+    if not context_set:
+        print(f"[STORE-CHECK][WARN] store={store.storeId} warm-up completed without store context", flush=True)
 
     for idx, sku in enumerate(skus, start=1):
         sku_id = sku.get("sku")
@@ -396,9 +417,27 @@ def _create_browser(headful: bool) -> Tuple["Playwright", "Browser", "BrowserCon
         raise SystemExit(1) from exc
 
     playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=not headful)
+    browser = playwright.chromium.launch(
+        headless=not headful,
+        args=["--disable-http2", "--disable-quic"],
+    )
     context = browser.new_context(locale="en-CA", timezone_id="America/Toronto")
     return playwright, browser, context
+
+
+def _create_firefox_context(playwright: "Playwright", headful: bool) -> Tuple["Browser", "BrowserContext"]:
+    browser = playwright.firefox.launch(headless=not headful)
+    context = browser.new_context(locale="en-CA", timezone_id="America/Toronto")
+    return browser, context
+
+
+def _http2_error_count(items: List[Dict[str, Any]]) -> int:
+    count = 0
+    for item in items:
+        offer = item.get("store_offer") or {}
+        if _is_http2_protocol_error(str(offer.get("error") or "")):
+            count += 1
+    return count
 
 
 def main() -> None:
@@ -420,6 +459,19 @@ def main() -> None:
     try:
         for store in stores:
             store_items = _run_for_store(context, store, skus, args.sleep, args.retries)
+            http2_errors = _http2_error_count(store_items)
+            if http2_errors >= STORE_HTTP2_FALLBACK_RETRIES:
+                print(
+                    f"[STORE-CHECK][FALLBACK] store={store.storeId} chromium_http2_errors={http2_errors} -> firefox",
+                    flush=True,
+                )
+                firefox_browser, firefox_context = _create_firefox_context(playwright, args.headful)
+                try:
+                    store_items = _run_for_store(firefox_context, store, skus, args.sleep, args.retries)
+                finally:
+                    firefox_context.close()
+                    firefox_browser.close()
+
             output_path = args.output_dir / f"{store.slug}.json"
             _write_json(output_path, store_items)
             all_items.extend(store_items)
