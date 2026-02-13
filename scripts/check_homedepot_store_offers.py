@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 
 DEFAULT_STORES_PATH = Path("data/home_depot_stores.json")
-DEFAULT_SKUS_PATH = Path("data/skus_only.json")
+DEFAULT_PRODUCTS_PATH = Path("data/homedepot_products.json")
 DEFAULT_OUTPUT_DIR = Path("public/homedepot")
 DEFAULT_INDEX_PATH = Path("public/index/homedepot-deals.json")
 DEFAULT_MAX_STORES = 5
@@ -56,9 +56,16 @@ def _build_store_slug(store_id: str, city: str, province: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check Home Depot store-level offers for SKU URLs")
+    parser = argparse.ArgumentParser(description="Check Home Depot store-level offers for product URLs")
     parser.add_argument("--stores", type=Path, default=DEFAULT_STORES_PATH, help="Path to stores JSON")
-    parser.add_argument("--skus", type=Path, default=DEFAULT_SKUS_PATH, help="Path to SKUs/deals JSON")
+    parser.add_argument(
+        "--products",
+        "--skus",
+        dest="products",
+        type=Path,
+        default=DEFAULT_PRODUCTS_PATH,
+        help="Path to products JSON",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Output directory for store JSON files")
     parser.add_argument("--index-output", type=Path, default=DEFAULT_INDEX_PATH, help="Aggregated index output file")
     parser.add_argument("--max-stores", type=int, default=DEFAULT_MAX_STORES, help="Maximum stores to process")
@@ -69,9 +76,14 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _extract_sku_from_url(url: str) -> str:
+    match = re.search(r"/(\d+)(?:[/?#]|$)", url)
+    return match.group(1) if match else ""
+
+
 def _load_json_list(path: Path, label: str) -> List[Dict[str, Any]]:
     if not path.exists():
-        suggestion = " As-tu commité data/skus_only.json ?" if label == "skus" else ""
+        suggestion = " As-tu commité data/homedepot_products.json ?" if label == "products" else ""
         raise FileNotFoundError(f"{label} file not found: {path}.{suggestion}")
 
     with open(path, "r", encoding="utf-8") as handle:
@@ -80,28 +92,33 @@ def _load_json_list(path: Path, label: str) -> List[Dict[str, Any]]:
     if not isinstance(data, list):
         raise ValueError(f"{label} must be a JSON array: {path}")
 
-    if label == "skus":
+    if label == "products":
         items: List[Any] = data
         if items and isinstance(items[0], str):
-            items = [{"sku": str(s).strip()} for s in items if str(s).strip()]
+            items = [{"url": str(s).strip()} for s in items if str(s).strip()]
 
         normalized: List[Dict[str, Any]] = []
-        seen_skus: set[str] = set()
+        seen_ids: set[str] = set()
         for item in items:
             if isinstance(item, str):
-                sku_value = item.strip()
-                row: Dict[str, Any] = {"sku": sku_value}
+                row = {"url": item.strip()}
             elif isinstance(item, dict):
-                sku_value = str(item.get("sku") or "").strip()
                 row = dict(item)
-                row["sku"] = sku_value
             else:
                 continue
 
-            if not sku_value or sku_value in seen_skus:
+            url = str(row.get("url") or "").strip()
+            if not url:
                 continue
 
-            seen_skus.add(sku_value)
+            sku_value = str(row.get("sku") or "").strip() or _extract_sku_from_url(url)
+            row["url"] = url
+            row["sku"] = sku_value
+            unique_id = sku_value or url
+            if unique_id in seen_ids:
+                continue
+
+            seen_ids.add(unique_id)
             normalized.append(row)
 
         return normalized
@@ -280,11 +297,7 @@ def _check_one_sku(page: "Page", store: Store, sku: Dict[str, Any], retries: int
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
             page.wait_for_timeout(900)
-            context_ok = _set_store_context(page, store)
-            page.wait_for_timeout(1000)
             offer = _extract_store_offer(page, sku)
-            if not context_ok:
-                offer["status"] = "unknown"
             return {"store_offer": offer}
         except Exception as exc:  # noqa: BLE001
             message = str(exc)
@@ -344,6 +357,15 @@ def _run_for_store(
     print(f"[STORE-CHECK] start store={store.storeId} city={store.city}", flush=True)
     page = context.new_page()
     offers: List[Dict[str, Any]] = []
+    context_set = False
+    try:
+        page.goto("https://www.homedepot.ca/", wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT_MS)
+        page.wait_for_timeout(800)
+        context_set = _set_store_context(page, store)
+        page.wait_for_timeout(1200)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[STORE-CHECK][WARN] store={store.storeId} unable to set context once: {exc}", flush=True)
+
     for idx, sku in enumerate(skus, start=1):
         sku_id = sku.get("sku")
         print(f"[STORE-CHECK] store={store.storeId} sku={sku_id} ({idx}/{len(skus)})", flush=True)
@@ -351,6 +373,8 @@ def _run_for_store(
         check_result = _check_one_sku(page, store, sku, retries)
         item.update(check_result)
         store_offer = item.get("store_offer") or {}
+        if not context_set and store_offer.get("status") == "ok":
+            store_offer["status"] = "unknown"
         item["status"] = store_offer.get("status")
         item["price"] = store_offer.get("price")
         item["checked_at"] = store_offer.get("last_checked_at")
@@ -385,7 +409,7 @@ def main() -> None:
         raise SystemExit("--max-skus must be >= 0")
 
     stores_raw = _load_json_list(args.stores, "stores")
-    skus_raw = _load_json_list(args.skus, "skus")
+    skus_raw = _load_json_list(args.products, "products")
     stores = [Store.from_dict(row) for row in stores_raw[: args.max_stores]]
     skus = skus_raw[: args.max_skus] if args.max_skus > 0 else skus_raw
 
