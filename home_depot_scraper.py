@@ -10,6 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+from src.orchestrator.tasks import build_homedepot_tasks, run_homedepot_tasks
+from src.policy import load_homedepot_policy
+
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
@@ -836,25 +839,44 @@ Exemples d'utilisation:
         scraper = HomeDepotScraper()
         scraper.stores = shard_info['stores']
 
-        verified_stores = scraper.run_shard_concurrently(shard_info['stores'])
+        use_legacy_scrape = os.getenv("ENABLE_LEGACY_HOMEDEPOT_SCRAPE", "0") == "1"
+        if use_legacy_scrape:
+            print("[LEGACY] ENABLE_LEGACY_HOMEDEPOT_SCRAPE=1, fallback to legacy scraping flow")
+            verified_stores = scraper.run_shard_concurrently(shard_info['stores'])
+            print("\n" + "=" * 70)
+            print(f"✅ SHARD {run_shard_id} TERMINÉ")
+            print(f"📦 {len(scraper.products)} produits trouvés")
+            print(f"🏪 {verified_stores} magasins vérifiés")
+            print("=" * 70)
+            output_dir = "results"
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            json_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.json")
+            csv_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.csv")
+            scraper.save_to_json(json_filename)
+            scraper.save_to_csv(csv_filename)
+            scraper.print_summary()
+            scraper.print_enrich_summary()
+        else:
+            policy = load_homedepot_policy()
+            with open("data/skus_only.json", "r", encoding="utf-8") as f:
+                skus = [str(s) for s in json.load(f)]
 
-        print("\n" + "=" * 70)
-        print(f"✅ SHARD {run_shard_id} TERMINÉ")
-        print(f"📦 {len(scraper.products)} produits trouvés")
-        print(f"🏪 {verified_stores} magasins vérifiés")
-        print("=" * 70)
+            batch_size = int(os.getenv("HOMEDEPOT_BATCH_SIZE", "50"))
+            source_mode = os.getenv("HOMEDEPOT_SOURCE_MODE", "scrape_mode")
+            tasks = build_homedepot_tasks(shard_info['stores'], skus, batch_size=batch_size)
+            print(f"[ORCHESTRATOR] tasks_generated={len(tasks)} batch_size={batch_size} source_mode={source_mode}")
 
-        output_dir = "results"
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        json_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.json")
-        csv_filename = os.path.join(output_dir, f"shard_{run_shard_id:02d}_results.csv")
-
-        scraper.save_to_json(json_filename)
-        scraper.save_to_csv(csv_filename)
-        scraper.print_summary()
-        scraper.print_enrich_summary()
+            metrics = run_homedepot_tasks(
+                tasks=tasks,
+                source_policy=policy,
+                source_mode=source_mode,
+                output_path=os.path.join("results", f"shard_{run_shard_id:02d}_offer_snapshots.json"),
+                max_rps=float(os.getenv("HOMEDEPOT_MAX_RPS", "2")),
+                burst=int(os.getenv("HOMEDEPOT_BURST", "4")),
+            )
+            print(f"[ORCHESTRATOR] metrics={metrics}")
+            print("[PIPELINE] Home Depot stage complete; continuing pipeline without fatal error.")
 
         print("\n🎉 Script terminé avec succès!")
 

@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -92,6 +93,11 @@ def _create_browser(headful: bool) -> tuple["Playwright", "Browser", "BrowserCon
 
 def main() -> None:
     args = _parse_args()
+
+    allow_playwright = os.getenv("ENABLE_HOMEDEPOT_PLAYWRIGHT", "0") == "1"
+    if not allow_playwright:
+        print("[POLICY][blocked_by_policy] HomeDepot Playwright navigation disabled (CGU). Refusing run to avoid net::ERR_HTTP2_PROTOCOL_ERROR loops.")
+        raise SystemExit(0)
 
     playwright, browser, context = _create_browser(args.headful)
     try:
