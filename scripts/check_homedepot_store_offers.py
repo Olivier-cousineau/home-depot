@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 
 DEFAULT_STORES_PATH = Path("data/home_depot_stores.json")
-DEFAULT_SKUS_PATH = Path("data/homedepot_liquidations.json")
+DEFAULT_SKUS_PATH = Path("data/skus_only.json")
 DEFAULT_OUTPUT_DIR = Path("public/homedepot")
 DEFAULT_INDEX_PATH = Path("public/index/homedepot-deals.json")
 DEFAULT_MAX_STORES = 5
@@ -62,7 +62,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Output directory for store JSON files")
     parser.add_argument("--index-output", type=Path, default=DEFAULT_INDEX_PATH, help="Aggregated index output file")
     parser.add_argument("--max-stores", type=int, default=DEFAULT_MAX_STORES, help="Maximum stores to process")
-    parser.add_argument("--max-skus", type=int, default=None, help="Maximum SKUs to process per store")
+    parser.add_argument("--max-skus", type=int, default=0, help="Maximum SKUs to process per store (0 = no limit)")
     parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP, help="Sleep between SKU checks")
     parser.add_argument("--retries", type=int, default=2, help="Retries for navigation/UI operations")
     parser.add_argument("--headful", action="store_true", help="Run browser in headed mode")
@@ -71,11 +71,41 @@ def _parse_args() -> argparse.Namespace:
 
 def _load_json_list(path: Path, label: str) -> List[Dict[str, Any]]:
     if not path.exists():
-        raise FileNotFoundError(f"{label} file not found: {path}")
+        suggestion = " As-tu commité data/skus_only.json ?" if label == "skus" else ""
+        raise FileNotFoundError(f"{label} file not found: {path}.{suggestion}")
+
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
+
     if not isinstance(data, list):
         raise ValueError(f"{label} must be a JSON array: {path}")
+
+    if label == "skus":
+        items: List[Any] = data
+        if items and isinstance(items[0], str):
+            items = [{"sku": str(s).strip()} for s in items if str(s).strip()]
+
+        normalized: List[Dict[str, Any]] = []
+        seen_skus: set[str] = set()
+        for item in items:
+            if isinstance(item, str):
+                sku_value = item.strip()
+                row: Dict[str, Any] = {"sku": sku_value}
+            elif isinstance(item, dict):
+                sku_value = str(item.get("sku") or "").strip()
+                row = dict(item)
+                row["sku"] = sku_value
+            else:
+                continue
+
+            if not sku_value or sku_value in seen_skus:
+                continue
+
+            seen_skus.add(sku_value)
+            normalized.append(row)
+
+        return normalized
+
     return data
 
 
@@ -232,6 +262,8 @@ def _extract_store_offer(page: "Page", sku: Dict[str, Any]) -> Dict[str, Any]:
 def _check_one_sku(page: "Page", store: Store, sku: Dict[str, Any], retries: int) -> Dict[str, Any]:
     url = str(sku.get("url") or "").strip()
     if not url:
+        sku_id = str(sku.get("sku") or "")
+        print(f"[CHECK][SKIP] sku={sku_id} reason=missing_url", flush=True)
         return {
             "store_offer": {
                 "price": None,
@@ -239,7 +271,7 @@ def _check_one_sku(page: "Page", store: Store, sku: Dict[str, Any], retries: int
                 "stock_status": None,
                 "quantity": None,
                 "last_checked_at": datetime.now(timezone.utc).isoformat(),
-                "status": "unknown",
+                "status": "missing_url",
             }
         }
 
@@ -289,6 +321,9 @@ def _base_item(store: Store, sku: Dict[str, Any]) -> Dict[str, Any]:
         "image": sku.get("image"),
         "price_regular": sku.get("price_regular"),
         "price_clearance_online": sku.get("price_clearance"),
+        "status": "pending",
+        "price": None,
+        "checked_at": None,
         "store_offer": {},
     }
 
@@ -313,7 +348,12 @@ def _run_for_store(
         sku_id = sku.get("sku")
         print(f"[STORE-CHECK] store={store.storeId} sku={sku_id} ({idx}/{len(skus)})", flush=True)
         item = _base_item(store, sku)
-        item.update(_check_one_sku(page, store, sku, retries))
+        check_result = _check_one_sku(page, store, sku, retries)
+        item.update(check_result)
+        store_offer = item.get("store_offer") or {}
+        item["status"] = store_offer.get("status")
+        item["price"] = store_offer.get("price")
+        item["checked_at"] = store_offer.get("last_checked_at")
         offers.append(item)
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
@@ -341,13 +381,13 @@ def main() -> None:
     args = _parse_args()
     if args.max_stores < 0:
         raise SystemExit("--max-stores must be >= 0")
-    if args.max_skus is not None and args.max_skus < 0:
+    if args.max_skus < 0:
         raise SystemExit("--max-skus must be >= 0")
 
     stores_raw = _load_json_list(args.stores, "stores")
     skus_raw = _load_json_list(args.skus, "skus")
     stores = [Store.from_dict(row) for row in stores_raw[: args.max_stores]]
-    skus = skus_raw[: args.max_skus] if args.max_skus is not None else skus_raw
+    skus = skus_raw[: args.max_skus] if args.max_skus > 0 else skus_raw
 
     print(f"[STORE-CHECK] stores={len(stores)} skus={len(skus)} sleep={args.sleep}s retries={args.retries}", flush=True)
 
