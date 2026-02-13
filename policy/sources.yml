@@ -1,0 +1,5 @@
+homedepot_ca:
+  allowed_modes:
+    - partner_api
+  scrape_mode: disabled
+  scrape_mode_message: "HomeDepot.ca scraping is disabled by policy (CGU). Use partner_api/feed/permissioned source."
