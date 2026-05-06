@@ -83,3 +83,54 @@ playwright install chromium
 - `public/index/homedepot-deals.json`
 
 Le script produit un JSON stable (`indent=2`, clés triées) et ajoute `store_offer.status="unknown"` en fallback si le contexte magasin ne peut pas être appliqué.
+
+## Scraper clearance via API interne Home Depot Canada
+
+Le flux legacy activé par `ENABLE_LEGACY_HOMEDEPOT_SCRAPE=1` interroge maintenant l'API de recherche Home Depot Canada pour récupérer les liquidations magasin par magasin.
+
+### Configuration technique
+
+- Base URL: `https://www.homedepot.ca/api/search/v1/search`
+- Méthode: `GET`
+- Réponse: JSON
+- Impersonation TLS: `chrome124` via `curl_cffi` avec une session partagée
+- Pagination: maximum 40 pages de 40 résultats (`pageSize=40`)
+- Délai inter-requêtes: `0.3` seconde
+- Filtre clearance: `filter=j2z-xmv-qs7-43j`
+- Collection Firestore cible: `clearance_deals_homedepot`
+- Format magasin: ID normalisé sur 4 chiffres, puis cookie `store` posé sans zéros inutiles
+
+### Warm-up obligatoire
+
+Avant la première requête API d'un magasin, le client pose le cookie `store` sur `.homedepot.ca`, puis visite la page clearance:
+
+```python
+session.cookies.set("store", str(int(store_clean)), domain=".homedepot.ca")
+session.get(
+    "https://www.homedepot.ca/en/home/categories/all-collections/clearance.html",
+    headers=HD_HDRS,
+    timeout=10,
+)
+```
+
+Ce warm-up initialise la session pour que l'API retourne les prix et disponibilités du magasin sélectionné.
+
+### Requête API
+
+```text
+GET https://www.homedepot.ca/api/search/v1/search?q=*&store={store_id}&page={page}&filter=j2z-xmv-qs7-43j&pageSize=40&lang=en
+```
+
+La réponse est lue avec deux schémas possibles: `products` comme liste directe, ou `products.schemes[].items[]` comme structure imbriquée.
+
+### Post-processing
+
+Les deals retournés contiennent `id`, `title`, `currentPrice`, `originalPrice`, `pct`, `stock`, `category`, `url` et `image`. Les produits standards utilisent `pricing.displayPrice`, `pricing.wasprice`/`originalPrice` et reconstruisent le prix original depuis `pricing.savingsAmount` si nécessaire. Les bundles utilisent `bundleTotalPurchasePrice` et `bundleTotalWasNow`, et les bundles marqués `bundle_pickup_not_available` sont rejetés.
+
+Les filtres de sortie rejettent les prix sous 1,00 $, les rabais sous 40 % et les bundles non disponibles en ramassage magasin.
+
+### Dépendance
+
+```bash
+pip install curl_cffi
+```

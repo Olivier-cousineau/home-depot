@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+from src.adapters.homedepot_clearance_api import HomeDepotClearanceAPIClient
 from src.orchestrator.tasks import build_homedepot_tasks, run_homedepot_tasks
 from src.policy import load_homedepot_policy
 
@@ -365,38 +366,33 @@ class HomeDepotScraper:
         return False
 
     def scrape_clearance_for_store(self, store, deadline=None):
-        """Scrape les produits en liquidation pour un magasin spécifique"""
+        """Scrape les produits en liquidation via l'API clearance Home Depot Canada."""
         print(f"\n🏪 Magasin: {store.get('name', store.get('store_number'))}")
 
         if self.ci_mode:
             print(f"[ENRICH][SKIP] store {store.get('store_number', 'Unknown')} - CI blocked by HomeDepot")
             return []
 
-        clearance_urls = [
-            f"{self.base_url}/en/search?q=clearance&storeId={store['store_number']}",
-            f"{self.base_url}/fr/recherche?q=liquidation&storeId={store['store_number']}",
-            f"{self.base_url}/en/deals/clearance?storeId={store['store_number']}",
-        ]
+        self._enforce_deadline(deadline, store.get('store_number'))
+        store_id = store.get('store_number') or store.get('storeId')
+        client = HomeDepotClearanceAPIClient()
+        deals = client.fetch_deals(store_id)
 
         store_products = []
-
-        for url in clearance_urls:
-            self._enforce_deadline(deadline, store.get('store_number'))
-            response = self.make_request(url, store_id=store.get('store_number'), step="clearance", deadline=deadline)
-            if not response:
-                continue
-
-            soup = BeautifulSoup(response.content, 'html.parser')
-            products = soup.find_all(['div', 'article'], class_=lambda x: x and ('product' in x.lower() or 'pod' in x.lower()) if x else False)
-
-            for product_elem in products:
-                self._enforce_deadline(deadline, store.get('store_number'))
-                product_info = self.extract_product_info(product_elem, store)
-                if product_info:
-                    store_products.append(product_info)
-
-            if products:
-                break
+        for deal in deals:
+            self._enforce_deadline(deadline, store_id)
+            product = {
+                **deal,
+                'store_number': store_id,
+                'store_name': store.get('name', 'Unknown'),
+                'name': deal.get('title'),
+                'sku': deal.get('id'),
+                'price': deal.get('currentPrice'),
+                'original_price': deal.get('originalPrice'),
+                'discount_pct': deal.get('pct'),
+                'scraped_at': datetime.now().isoformat(),
+            }
+            store_products.append(product)
 
         print(f"   ✓ {len(store_products)} produits en liquidation trouvés")
         return store_products
